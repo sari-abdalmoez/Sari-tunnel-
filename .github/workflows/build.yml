@@ -8,15 +8,20 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sari-tunnel-android-build
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
 
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Java 17
+      - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,22 +30,47 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
-      - name: Install Android SDK packages
+      - name: Accept licenses and install SDK packages
         run: |
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          set -e
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-35" \
+            "platforms;android-36" \
+            "build-tools;35.0.0" \
+            "build-tools;36.0.0"
+          yes | sdkmanager --licenses >/dev/null || true
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.13'
+
+      - name: Inspect project configuration
+        run: |
+          echo "===== Project files ====="
+          find . -maxdepth 3 -type f \
+            ! -path './.git/*' | sort | head -200
+          echo "===== Gradle configuration ====="
+          sed -n '1,220p' build.gradle.kts
+          if [ -f app/build.gradle.kts ]; then
+            sed -n '1,260p' app/build.gradle.kts
+          fi
+          echo "===== Gradle version ====="
+          gradle --version
 
       - name: Build Debug APK
-        run: gradle --no-daemon assembleDebug
+        run: |
+          set -o pipefail
+          gradle --no-daemon --stacktrace --warning-mode all assembleDebug
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: SariTunnelAfrica-APK
-          path: app/build/outputs/apk/debug/*.apk
+          path: |
+            app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
