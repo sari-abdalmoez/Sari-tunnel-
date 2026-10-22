@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SariTunnel" parent="Theme.Material3.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/sari_blue</item>
+    </style>
+</resources>
