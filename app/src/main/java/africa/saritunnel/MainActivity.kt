@@ -38,6 +38,10 @@ class MainActivity : AppCompatActivity() {
         Engine.init(this)
 
         b.startButton.setOnClickListener { onMainButton() }
+        b.openVpnButton.setOnClickListener {
+            startActivity(Intent(this, OpenVpnCatalogActivity::class.java))
+        }
+
         b.advancedButton.setOnClickListener {
             startActivity(Intent(this, AdvancedActivity::class.java))
         }
