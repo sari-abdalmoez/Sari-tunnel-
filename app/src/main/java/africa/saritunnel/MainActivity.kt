@@ -40,6 +40,9 @@ class MainActivity : AppCompatActivity() {
     private var autoConnectAfterRefresh = false
     private var torLaunchRequested = false
     private var vlessLaunchRequested = false
+    private val connectionPrefs by lazy { getSharedPreferences("sari_connection_prefs", MODE_PRIVATE) }
+    private var stableServerEnabled = true
+    private var pinnedServerIdentity: String? = null
     private var currentIndex = -1
     private var generation = 0
     private var attemptsSinceSelection = 0
@@ -72,6 +75,14 @@ class MainActivity : AppCompatActivity() {
             onError = ::handleClientError
         )
 
+        stableServerEnabled = connectionPrefs.getBoolean("stable_server_enabled", true)
+        pinnedServerIdentity = connectionPrefs.getString("pinned_server_identity", null)
+        b.stableServerButton.setOnClickListener {
+            stableServerEnabled = !stableServerEnabled
+            connectionPrefs.edit().putBoolean("stable_server_enabled", stableServerEnabled).apply()
+            updateStableServerButton()
+            b.statusMessage.text = if (stableServerEnabled) "STABLE mode: keep the selected server; no automatic server switching." else "AUTO mode: try the next server if the current one fails."
+        }
         b.openVpnButton.setOnClickListener { selectProtocol("OPENVPN") }
         b.vlessServersButton.setOnClickListener { selectProtocol("VLESS") }
         b.torButton.setOnClickListener { selectProtocol("TOR") }
@@ -113,6 +124,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         updateProtocolButtons()
+        updateStableServerButton()
         updateStartButton()
         appendLog("Sari VPN ready. Loading OpenVPN profiles.")
         refreshServers(force = false)
@@ -150,6 +162,16 @@ class MainActivity : AppCompatActivity() {
             else -> "Tor VPN selected · uses the official Tor VPN app for Android."
         }
     }
+    private fun serverIdentity(server: OpenVpnServer): String = server.id.ifBlank { "${server.country}|${server.ip}|${server.profileUrl.orEmpty()}" }
+
+    private fun updateStableServerButton() {
+        if (!::b.isInitialized) return
+        b.stableServerButton.text = if (stableServerEnabled) "STABLE: ON" else "AUTO: FASTEST"
+        val color = if (stableServerEnabled) R.color.sari_blue else R.color.sari_surface_alt
+        b.stableServerButton.backgroundTintList = android.content.res.ColorStateList.valueOf(ContextCompat.getColor(this, color))
+        b.stableServerButton.setTextColor(ContextCompat.getColor(this, R.color.sari_text))
+    }
+
     private fun updateProtocolButtons() {
         val selected = ContextCompat.getColor(this, R.color.sari_blue)
         val idle = ContextCompat.getColor(this, R.color.sari_surface_alt)
@@ -217,11 +239,11 @@ class MainActivity : AppCompatActivity() {
                 b.refreshServersButton.isEnabled = true
                 if (autoConnectAfterRefresh) {
                     autoConnectAfterRefresh = false
-                    val fastest = servers.indices
-                        .filter { i -> !servers[i].profileUrl.isNullOrBlank() || !servers[i].inlineProfile.isNullOrBlank() }
-                        .minByOrNull { i -> servers[i].reportedPingMs ?: Int.MAX_VALUE }
+                    val connectable = servers.indices.filter { i -> !servers[i].profileUrl.isNullOrBlank() || !servers[i].inlineProfile.isNullOrBlank() }
+                    val pinned = if (stableServerEnabled && !pinnedServerIdentity.isNullOrBlank()) connectable.firstOrNull { i -> serverIdentity(servers[i]) == pinnedServerIdentity } else null
+                    val fastest = pinned ?: connectable.minByOrNull { i -> servers[i].reportedPingMs ?: Int.MAX_VALUE }
                     if (fastest != null && !isAttemptActive && !isConnected) {
-                        appendLog("Auto-selecting the lowest reported-ping OpenVPN profile.")
+                        appendLog(if (pinned != null) "Using pinned STABLE server: ${servers[fastest].displayName}." else "Auto-selecting the lowest reported-ping OpenVPN profile.")
                         startConnectionAtIndex(fastest, automatic = false)
                     } else if (!isAttemptActive && !isConnected) {
                         b.statusTitle.text = "NO CONNECTABLE SERVER"
@@ -287,6 +309,11 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener {
                     manualStop = false
                     attemptsSinceSelection = 0
+                    if (stableServerEnabled) {
+                        pinnedServerIdentity = serverIdentity(server)
+                        connectionPrefs.edit().putString("pinned_server_identity", pinnedServerIdentity).apply()
+                        updateStableServerButton()
+                    }
                     startConnectionAtIndex(index, automatic = false)
                 }
             }
@@ -324,6 +351,11 @@ class MainActivity : AppCompatActivity() {
         currentIndex = index
         currentServer = servers[index]
         val server = servers[index]
+        if (stableServerEnabled && !automatic) {
+            pinnedServerIdentity = serverIdentity(server)
+            connectionPrefs.edit().putString("pinned_server_identity", pinnedServerIdentity).apply()
+            updateStableServerButton()
+        }
         if (server.profileUrl.isNullOrBlank() && server.inlineProfile.isNullOrBlank()) {
             appendLog("${server.displayName} is an IP-only directory entry; a complete .ovpn profile is required.")
             if (automatic) {
@@ -427,6 +459,11 @@ class MainActivity : AppCompatActivity() {
 
     private fun retryNext(index: Int, expectedGeneration: Int, reason: String) {
         if (expectedGeneration != generation || retryQueued || manualStop || isConnected) return
+        if (stableServerEnabled) {
+            appendLog("STABLE mode prevents automatic IP/server switching.")
+            finishFailed("Stable server failed: $reason. Automatic switching is disabled. Turn STABLE off to allow failover.")
+            return
+        }
         retryQueued = true
         connectionWatchdog?.cancel()
         appendLog("Server attempt failed: $reason")

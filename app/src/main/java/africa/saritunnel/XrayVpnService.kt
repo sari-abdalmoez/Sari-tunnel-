@@ -68,7 +68,7 @@ class XrayVpnService : VpnService() {
                     tun?.close()
                     tun = Builder()
                         .setSession("SariTunnel · VLESS")
-                        .setMtu(1500)
+                        .setMtu(1280)
                         .addAddress("10.111.0.1", 32)
                         .addRoute("0.0.0.0", 0)
                         .addDnsServer("1.1.1.1")

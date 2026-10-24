@@ -1,4 +1,4 @@
-name: Build SariTunnelAfrica APK
+name: Build Sari VPN APK
 
 on:
   push:
@@ -9,23 +9,29 @@ permissions:
   contents: read
 
 concurrency:
-  group: sari-tunnel-android-build
+  group: sari-vpn-android-build
   cancel-in-progress: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
-
+    timeout-minutes: 60
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
+
+      - name: Set up Go for the Xray native engine
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: true
+          cache-dependency-path: xray-go/go.mod
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -34,47 +40,38 @@ jobs:
           accept-android-sdk-licenses: true
           log-accepted-android-sdk-licenses: false
 
-      - name: Accept licenses and install SDK packages
+      - name: Install Android SDK and NDK
         run: |
-          set -e
+          set -euo pipefail
           yes | sdkmanager --licenses >/dev/null || true
           sdkmanager --install \
-            "platform-tools" \
             "platforms;android-35" \
-            "platforms;android-36" \
             "build-tools;35.0.0" \
-            "build-tools;36.0.0"
-          yes | sdkmanager --licenses >/dev/null || true
+            "platform-tools" \
+            "ndk;26.1.10909125"
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-$HOME/android-sdk}}"
+          echo "ANDROID_HOME=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK_ROOT" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$SDK_ROOT/ndk/26.1.10909125" >> "$GITHUB_ENV"
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.13'
 
-      - name: Inspect project configuration
+      - name: Build Android APK and embedded Xray engine
         run: |
-          echo "===== Project files ====="
-          find . -maxdepth 3 -type f \
-            ! -path './.git/*' | sort | head -200
-          echo "===== Gradle configuration ====="
-          sed -n '1,220p' build.gradle.kts
-          if [ -f app/build.gradle.kts ]; then
-            sed -n '1,260p' app/build.gradle.kts
-          fi
-          echo "===== Gradle version ====="
-          gradle --version
-
-      - name: Build Debug APK
-        run: |
-          set -o pipefail
+          set -euo pipefail
+          go version
           gradle --no-daemon --stacktrace --warning-mode all assembleDebug
+          test -s app/libs/xray.aar
 
-      - name: Upload APK
+      - name: Upload debug APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: SariTunnelAfrica-APK
-          path: |
-            app/build/outputs/apk/debug/*.apk
+          name: SariVPN-MultiEngine-APK
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
