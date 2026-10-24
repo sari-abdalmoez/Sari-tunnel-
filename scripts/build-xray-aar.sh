@@ -17,9 +17,13 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 export GONOSUMDB="${GONOSUMDB:-github.com/xtls/xray-core}"
 
 cd "$ROOT/xray-go"
+MOBILE_VERSION="v0.0.0-20260709172247-6129f5bee9d5"
 echo "Resolving pinned Xray-core dependencies..."
 go mod tidy
-MOBILE_VERSION="v0.0.0-20260709172247-6129f5bee9d5"
+
+# Register gobind as a Go tool before gomobile bind checks the module graph.
+go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
+
 echo "Installing gomobile/gobind $MOBILE_VERSION..."
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
