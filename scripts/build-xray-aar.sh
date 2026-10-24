@@ -21,6 +21,9 @@ echo "Resolving pinned Xray-core dependencies..."
 go mod tidy
 MOBILE_VERSION="v0.0.0-20260709172247-6129f5bee9d5"
 echo "Installing gomobile/gobind $MOBILE_VERSION..."
+# Register gomobile tools in go.mod for Go 1.26 compatibility.
+go get -tool "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
+go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 gomobile init
