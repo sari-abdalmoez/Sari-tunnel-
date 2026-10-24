@@ -36,6 +36,10 @@ class MainActivity : AppCompatActivity() {
     private var servers: List<OpenVpnServer> = emptyList()
     private var currentServer: OpenVpnServer? = null
     private var returningFromAdvancedSettings = false
+    private var selectedProtocol = "OPENVPN"
+    private var autoConnectAfterRefresh = false
+    private var torLaunchRequested = false
+    private var vlessLaunchRequested = false
     private var currentIndex = -1
     private var generation = 0
     private var attemptsSinceSelection = 0
@@ -68,16 +72,22 @@ class MainActivity : AppCompatActivity() {
             onError = ::handleClientError
         )
 
+        b.openVpnButton.setOnClickListener { selectProtocol("OPENVPN") }
+        b.vlessServersButton.setOnClickListener { selectProtocol("VLESS") }
+        b.torButton.setOnClickListener { selectProtocol("TOR") }
         b.startButton.setOnClickListener {
-            if (isAttemptActive || isConnected) disconnectByUser() else refreshServers(force = true)
+            if (isAttemptActive || isConnected) disconnectByUser()
+            else when (selectedProtocol) {
+                "OPENVPN" -> { autoConnectAfterRefresh = true; refreshServers(force = true) }
+                "VLESS" -> { if (vlessLaunchRequested) stopVlessFromMain() else { openProtocol(VlessServerCatalogActivity::class.java); vlessLaunchRequested = true; updateStartButton() } }
+                "TOR" -> launchOrManageTor()
+            }
         }
         b.refreshServersButton.setOnClickListener {
             if (isAttemptActive || isConnected) {
                 toast("Disconnect before refreshing the server list.")
             } else refreshServers(force = true)
         }
-        b.vlessServersButton.setOnClickListener { openProtocol(VlessServerCatalogActivity::class.java) }
-        b.wireGuardButton.setOnClickListener { openProtocol(WireGuardActivity::class.java) }
         b.advancedButton.setOnClickListener {
             returningFromAdvancedSettings = true
             startActivity(Intent(this, AdvancedActivity::class.java))
@@ -102,7 +112,9 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        appendLog("Sari VPN ready. Loading IPSpeed server list.")
+        updateProtocolButtons()
+        updateStartButton()
+        appendLog("Sari VPN ready. Loading OpenVPN profiles.")
         refreshServers(force = false)
     }
 
@@ -118,7 +130,7 @@ class MainActivity : AppCompatActivity() {
         if (isAttemptActive || isConnected) {
             AlertDialog.Builder(this)
                 .setTitle("Switch VPN engine?")
-                .setMessage("OpenVPN is active or still connecting. Disconnect it before using VLESS or WireGuard; Android only supports one active VPN at a time.")
+                .setMessage("OpenVPN is active or still connecting. Disconnect it before switching to VLESS or Tor VPN; Android only supports one active VPN at a time.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Disconnect and continue") { _, _ ->
                     disconnectByUser()
@@ -126,6 +138,58 @@ class MainActivity : AppCompatActivity() {
                 }
                 .show()
         } else startActivity(Intent(this, destination))
+    }
+
+    private fun selectProtocol(protocol: String) {
+        if (isAttemptActive || isConnected) { toast("Stop the current VPN before changing protocol."); return }
+        selectedProtocol = protocol
+        updateProtocolButtons(); updateStartButton()
+        b.statusMessage.text = when (protocol) {
+            "OPENVPN" -> "OpenVPN selected · auto-pick the lowest reported-ping complete profile."
+            "VLESS" -> "VLESS / Xray selected · load your published server links."
+            else -> "Tor VPN selected · uses the official Tor VPN app for Android."
+        }
+    }
+    private fun updateProtocolButtons() {
+        val selected = ContextCompat.getColor(this, R.color.sari_blue)
+        val idle = ContextCompat.getColor(this, R.color.sari_surface_alt)
+        listOf(b.openVpnButton to "OPENVPN", b.vlessServersButton to "VLESS", b.torButton to "TOR").forEach { (button, protocol) ->
+            button.backgroundTintList = android.content.res.ColorStateList.valueOf(if (selectedProtocol == protocol) selected else idle)
+            button.setTextColor(ContextCompat.getColor(this, R.color.sari_text))
+        }
+    }
+    private fun updateStartButton() {
+        b.startButton.text = when {
+            isAttemptActive || isConnected -> "STOP VPN"
+            selectedProtocol == "TOR" && torLaunchRequested -> "MANAGE TOR VPN"
+            selectedProtocol == "VLESS" && vlessLaunchRequested -> "STOP VLESS"
+            else -> "CONNECT"
+        }
+    }
+    private fun launchOrManageTor() {
+        if (torLaunchRequested) {
+            try { startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS)); b.statusMessage.text = "VPN settings opened. Disconnect Tor there; Android does not let Sari directly stop another app's VPN." }
+            catch (_: Exception) { toast("Open Android Settings → VPN to disconnect Tor VPN.") }
+            torLaunchRequested = false; updateStartButton(); return
+        }
+        val torIntent = packageManager.getLaunchIntentForPackage("org.torproject.vpn")
+        if (torIntent != null) {
+            startActivity(torIntent); torLaunchRequested = true
+            b.statusTitle.text = "TOR VPN"
+            b.statusMessage.text = "Official Tor VPN opened. Start the connection in that app, then return here to manage it."
+            updateStartButton()
+        } else AlertDialog.Builder(this).setTitle("Install Tor VPN")
+            .setMessage("Tor VPN is a separate official Android app. Install it from the Tor Project, then return and tap Connect.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Official download") { _, _ -> startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://download.torproject.org/tor-vpn-for-android/"))) }.show()
+    }
+    private fun stopVlessFromMain() {
+        try {
+            startService(Intent(this, XrayVpnService::class.java).setAction(XrayVpnService.ACTION_STOP))
+            b.statusTitle.text = "VLESS STOP REQUESTED"; b.statusMessage.text = "A disconnect request was sent to the Xray service."
+            appendLog("VLESS stop requested from the main screen.")
+        } catch (e: Exception) { toast("Could not stop VLESS: ${e.message ?: e.javaClass.simpleName}") }
+        finally { vlessLaunchRequested = false; updateStartButton() }
     }
 
     private fun refreshServers(force: Boolean) {
@@ -151,7 +215,20 @@ class MainActivity : AppCompatActivity() {
             } finally {
                 b.serverProgress.visibility = View.GONE
                 b.refreshServersButton.isEnabled = true
-                if (!isAttemptActive && !isConnected) b.startButton.text = "REFRESH SERVERS"
+                if (autoConnectAfterRefresh) {
+                    autoConnectAfterRefresh = false
+                    val fastest = servers.indices
+                        .filter { i -> !servers[i].profileUrl.isNullOrBlank() || !servers[i].inlineProfile.isNullOrBlank() }
+                        .minByOrNull { i -> servers[i].reportedPingMs ?: Int.MAX_VALUE }
+                    if (fastest != null && !isAttemptActive && !isConnected) {
+                        appendLog("Auto-selecting the lowest reported-ping OpenVPN profile.")
+                        startConnectionAtIndex(fastest, automatic = false)
+                    } else if (!isAttemptActive && !isConnected) {
+                        b.statusTitle.text = "NO CONNECTABLE SERVER"
+                        b.statusMessage.text = "No complete .ovpn profile is available. IP addresses alone cannot connect."
+                        updateStartButton()
+                    }
+                } else if (!isAttemptActive && !isConnected) updateStartButton()
             }
         }
     }
@@ -258,7 +335,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         vpnClient.disconnect()
-        b.startButton.text = "DISCONNECT"
+        b.startButton.text = "STOP VPN"
         b.statusTitle.text = if (automatic) "SWITCHING SERVER" else "PREPARING VPN"
         b.statusMessage.text = "Loading ${server.displayName}…"
         b.serverText.text = server.displayName
@@ -329,7 +406,7 @@ class MainActivity : AppCompatActivity() {
                     retryQueued = false
                     b.statusTitle.text = "CONNECTED"
                     b.statusMessage.text = "Tunnel and HTTPS traffic verified with ${currentServer?.displayName ?: "server"}."
-                    b.startButton.text = "DISCONNECT"
+                    b.startButton.text = "STOP VPN"
                     appendLog("VPN handshake and HTTPS traffic check succeeded.")
                 } else {
                     appendLog("Tunnel handshake appeared successful, but HTTPS traffic verification failed.")
@@ -381,7 +458,7 @@ class MainActivity : AppCompatActivity() {
         connectedAtWallClock = 0L
         b.statusTitle.text = "DISCONNECTED"
         b.statusMessage.text = "VPN disconnected by user."
-        b.startButton.text = "REFRESH SERVERS"
+        updateStartButton()
         b.protocolText.text = "Engine: OpenVPN for Android"
         appendLog("Disconnect requested by user.")
     }
@@ -397,7 +474,7 @@ class MainActivity : AppCompatActivity() {
         vpnClient.disconnect()
         b.statusTitle.text = "CONNECTION FAILED"
         b.statusMessage.text = message
-        b.startButton.text = "REFRESH SERVERS"
+        updateStartButton()
         b.elapsedText.text = "00:00:00"
         appendLog(message)
     }
@@ -421,14 +498,14 @@ class MainActivity : AppCompatActivity() {
             isAttemptActive = false
             isConnected = false
             isVerifying = false
-            b.startButton.text = "REFRESH SERVERS"
+            updateStartButton()
             b.statusTitle.text = "ENGINE REQUIRED"
             return
         }
         if (message.contains("not granted", true) || message.contains("permission was not granted", true)) {
             isAttemptActive = false
             b.statusTitle.text = "PERMISSION REQUIRED"
-            b.startButton.text = "REFRESH SERVERS"
+            updateStartButton()
             return
         }
         if (startedAtElapsed > 0L && isAttemptActive && !isConnected) {

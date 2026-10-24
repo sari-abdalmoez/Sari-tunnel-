@@ -95,7 +95,7 @@ object XrayConfigBuilder {
         val inbounds = JSONArray().put(JSONObject()
             .put("tag", "sari-tun")
             .put("protocol", "tun")
-            .put("settings", JSONObject().put("name", "saritun").put("mtu", 1500)))
+            .put("settings", JSONObject().put("name", "saritun").put("mtu", 1280)))
         val root = JSONObject()
             .put("log", JSONObject().put("loglevel", "warning"))
             .put("inbounds", inbounds)

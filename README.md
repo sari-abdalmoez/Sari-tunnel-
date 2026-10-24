@@ -5,7 +5,7 @@
 ## المحركات
 
 - **VLESS / Xray داخل التطبيق:** يقرأ روابط `vless://` المنشورة في [صفحة Blogger](https://connection7876.blogspot.com/?m=1)، ويبني إعداد Xray ويبدأ نفق Android `VpnService`. مشروع Go bridge في `xray-go/` يُحوّل إلى `app/libs/xray.aar` آلياً عبر `scripts/build-xray-aar.sh`.
-- **WireGuard داخل التطبيق:** يستخدم مكتبة WireGuard Tunnel الرسمية، ويطلب ملف إعداد كامل من مزود الخادم عبر شاشة WireGuard. ملف الإعداد يُخزن باستخدام `EncryptedSharedPreferences`.
+- **Tor VPN:** يفتح التطبيق الرسمي المستقل Tor VPN for Android (الحزمة `org.torproject.vpn`). بسبب قيود Android، لا يتحكم SariTunnelAfrica مباشرة في تشغيل/إيقاف VPN خارجي؛ يفتح التطبيق الرسمي أو إعدادات VPN لإدارة الاتصال.
 - **OpenVPN:** يستكشف التطبيق ملفات `.ovpn` من IPSpeed ثم يرجع إلى `servers.json` عند فشل المصدر أو إرجاعه 404/صفحة حماية. يرسل الملف إلى **OpenVPN for Android** عبر واجهة AIDL الرسمية؛ يلزم تثبيت التطبيق المرافق والموافقة على الوصول أول مرة. محرك OpenVPN نفسه ليس مضمناً داخل APK.
 
 ## مهم عن عناوين الخوادم
@@ -43,7 +43,7 @@ Android يسمح باتصال VPN نشط واحد فقط في الوقت نفس�
 - `app/src/main/java/africa/saritunnel/XrayConfigBuilder.kt` — التحويل من رابط VLESS إلى إعداد Xray.
 - `app/src/main/java/africa/saritunnel/XrayVpnService.kt` — دورة حياة نفق Xray/TUN.
 - `xray-go/xray_bridge.go` — جسر Xray الأصلي وحماية مقابس الاتصال من التوجيه داخل النفق نفسه.
-- `app/src/main/java/africa/saritunnel/WireGuardActivity.kt` — محرك WireGuard وإدخال ملف الإعداد.
+- `app/src/main/java/africa/saritunnel/MainActivity.kt` — اختيار المحرك، الاتصال/الإيقاف، والاختيار التلقائي لأقل ping منشور في OpenVPN.
 - `app/src/main/java/africa/saritunnel/OpenVpnClient.kt` — التحكم بمحرك OpenVPN المرافق.
 
 ## إعداد قائمة الخوادم الاحتياطية
@@ -53,3 +53,11 @@ Android يسمح باتصال VPN نشط واحد فقط في الوقت نفس�
 ## حدود الاختبار
 
 هذه حزمة مصدر كاملة وليست APK مختبراً. لا يتوفر في بيئة إعداد الملف اتصال إنترنت لتنزيل مستودعات Gradle/Go أو اختبار خوادم عامة. يجب تشغيل GitHub Actions والتحقق من سجل البناء، ثم اختبار النفق على هاتف فعلي. كما أن نجاح بدء Xray وحده ليس دليلاً كافياً على مرور حركة الإنترنت؛ اختبر عنوان IP الخارجي وDNS بعد الاتصال.
+
+
+## Performance tuning notes
+
+- Xray TUN MTU is set to 1280 as a conservative mobile-network value; a larger MTU may perform better on some networks, so this is not a universal speed guarantee.
+- Xray does not enable payload compression by default in this configuration.
+- BBR is a server-side Linux TCP congestion-control setting. It can only be enabled on a VPS the operator controls; the Android app cannot enable it on a third-party server.
+- OpenVPN automatic selection prioritizes the lowest published ping among complete profiles. Published ping can be stale; existing connection verification and failover still determine whether a profile actually works.

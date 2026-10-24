@@ -39,8 +39,6 @@ android {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
-    // Real in-app WireGuard userspace tunnel engine.
-    implementation("com.wireguard.android:tunnel:1.0.20260102")
     // Built by scripts/build-xray-aar.sh from xray-go during preBuild / GitHub Actions.
     implementation(files("libs/xray.aar"))
     implementation("androidx.core:core-ktx:1.15.0")

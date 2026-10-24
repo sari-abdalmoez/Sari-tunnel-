@@ -22,11 +22,6 @@
             android:exported="false"
             android:parentActivityName=".MainActivity" />
 
-        <activity
-            android:name=".WireGuardActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
-
         <service
             android:name=".XrayVpnService"
             android:exported="false"
