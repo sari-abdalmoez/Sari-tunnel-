@@ -3,77 +3,152 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
+    android:background="@color/sari_background"
     android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:padding="18dp">
 
         <TextView
             android:id="@+id/appName"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/app_name"
-            android:textSize="24sp"
+            android:text="Sari VPN"
+            android:textColor="@color/sari_text"
+            android:textSize="29sp"
             android:textStyle="bold" />
 
         <TextView
-            android:id="@+id/statusTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="DISCONNECTED"
-            android:textSize="18sp"
-            android:textStyle="bold" />
-
-        <TextView
-            android:id="@+id/statusMessage"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Ready"
-            android:textSize="14sp" />
-
-        <TextView
-            android:id="@+id/elapsedText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:fontFamily="monospace"
-            android:gravity="center"
-            android:text="00:00:00"
-            android:textSize="40sp" />
-
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/startButton"
-            android:layout_width="match_parent"
-            android:layout_height="72dp"
-            android:layout_marginTop="12dp"
-            android:text="START"
-            android:textSize="20sp"
+            android:layout_marginTop="3dp"
+            android:text="MULTI-PROTOCOL VPN · AUTOMATIC OPENVPN FAILOVER"
+            android:textColor="@color/sari_cyan"
+            android:textSize="11sp"
             android:textStyle="bold"
-            app:cornerRadius="16dp" />
+            android:letterSpacing="0.08" />
 
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
-            app:cardCornerRadius="12dp"
-            app:cardElevation="2dp">
+            app:cardBackgroundColor="@color/sari_surface"
+            app:cardCornerRadius="20dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#283A53"
+            app:strokeWidth="1dp">
 
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:orientation="vertical"
-                android:padding="16dp">
+                android:padding="18dp">
+
+                <TextView
+                    android:id="@+id/statusTitle"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="DISCONNECTED"
+                    android:textColor="@color/sari_text"
+                    android:textSize="18sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:id="@+id/statusMessage"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="5dp"
+                    android:text="Loading server list…"
+                    android:textColor="@color/sari_muted"
+                    android:textSize="13sp" />
+
+                <TextView
+                    android:id="@+id/elapsedText"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="12dp"
+                    android:fontFamily="monospace"
+                    android:gravity="center"
+                    android:text="00:00:00"
+                    android:textColor="@color/sari_text"
+                    android:textSize="36sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/startButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="58dp"
+                    android:layout_marginTop="12dp"
+                    android:text="REFRESH SERVERS"
+                    android:textSize="15sp"
+                    android:textStyle="bold"
+                    app:backgroundTint="@color/sari_blue"
+                    app:cornerRadius="16dp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="22dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="AVAILABLE SERVERS"
+                android:textColor="@color/sari_text"
+                android:textSize="15sp"
+                android:textStyle="bold" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/refreshServersButton"
+                style="@style/Widget.Material3.Button.TextButton"
+                android:layout_width="wrap_content"
+                android:layout_height="42dp"
+                android:text="Refresh"
+                android:textColor="@color/sari_cyan" />
+        </LinearLayout>
+
+        <ProgressBar
+            android:id="@+id/serverProgress"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="3dp"
+            android:layout_marginTop="8dp"
+            android:indeterminate="true"
+            android:visibility="gone" />
+
+        <LinearLayout
+            android:id="@+id/serverListContainer"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical" />
+
+        <com.google.android.material.card.MaterialCardView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            app:cardBackgroundColor="@color/sari_surface"
+            app:cardCornerRadius="14dp"
+            app:cardElevation="0dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="14dp">
 
                 <TextView
                     android:id="@+id/serverText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="—"
-                    android:textSize="16sp"
+                    android:text="No server selected"
+                    android:textColor="@color/sari_text"
                     android:textStyle="bold" />
 
                 <TextView
@@ -81,8 +156,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Protocol: WireGuard (UDP)"
-                    android:textSize="14sp" />
+                    android:text="Engine: OpenVPN for Android"
+                    android:textColor="@color/sari_muted"
+                    android:textSize="12sp" />
 
                 <LinearLayout
                     android:layout_width="match_parent"
@@ -95,50 +171,97 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="↓ 0 B/s"
-                        android:textSize="15sp" />
+                        android:text="↓ —"
+                        android:textColor="@color/sari_muted"
+                        android:textSize="13sp" />
 
                     <TextView
                         android:id="@+id/uploadText"
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="↑ 0 B/s"
-                        android:textSize="15sp" />
+                        android:gravity="end"
+                        android:text="↑ —"
+                        android:textColor="@color/sari_muted"
+                        android:textSize="13sp" />
                 </LinearLayout>
 
                 <TextView
                     android:id="@+id/usageText"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:layout_marginTop="8dp"
-                    android:text="Session data: 0 B"
-                    android:textSize="14sp" />
+                    android:layout_marginTop="6dp"
+                    android:text="Traffic counters are managed by the OpenVPN engine."
+                    android:textColor="@color/sari_muted"
+                    android:textSize="11sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
-        <com.google.android.material.button.MaterialButton
-            android:id="@+id/openVpnButton"
-            style="@style/Widget.Material3.Button.OutlinedButton"
+        <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Browse free OpenVPN profiles" />
+            android:layout_marginTop="16dp"
+            app:cardBackgroundColor="@color/sari_surface"
+            app:cardCornerRadius="16dp"
+            app:cardElevation="0dp"
+            app:strokeColor="#283A53"
+            app:strokeWidth="1dp">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="vertical"
+                android:padding="12dp">
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="OTHER VPN ENGINES"
+                    android:textColor="@color/sari_text"
+                    android:textSize="14sp"
+                    android:textStyle="bold" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/vlessServersButton"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="VLESS / Xray — load my Blogger servers" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/wireGuardButton"
+                    style="@style/Widget.Material3.Button.OutlinedButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="6dp"
+                    android:text="WireGuard — use a complete config" />
+
+                <TextView
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="Only one VPN can be active at a time. OpenVPN uses the separately installed OpenVPN for Android engine."
+                    android:textColor="@color/sari_muted"
+                    android:textSize="11sp" />
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/diagToggle"
             style="@style/Widget.Material3.Button.TextButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="Show diagnostics" />
+            android:layout_marginTop="8dp"
+            android:text="Show connection log"
+            android:textColor="@color/sari_muted" />
 
         <ScrollView
             android:id="@+id/diagPanel"
             android:layout_width="match_parent"
-            android:layout_height="200dp"
-            android:background="#11000000"
-            android:padding="8dp"
+            android:layout_height="180dp"
+            android:background="@color/sari_surface"
+            android:padding="10dp"
             android:visibility="gone">
 
             <TextView
@@ -146,6 +269,7 @@
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:fontFamily="monospace"
+                android:textColor="@color/sari_muted"
                 android:textSize="11sp" />
         </ScrollView>
 
@@ -153,8 +277,9 @@
             android:id="@+id/noteText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="No free servers are bundled. Add a legitimate WireGuard config or an HTTPS server feed in Advanced settings."
+            android:layout_marginTop="14dp"
+            android:text="Requires OpenVPN for Android as the tunnel engine. Public VPN servers are third-party services and do not make mobile data free."
+            android:textColor="@color/sari_muted"
             android:textSize="12sp" />
 
         <com.google.android.material.button.MaterialButton
@@ -163,6 +288,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Advanced settings" />
+            android:text="Advanced settings"
+            android:textColor="@color/sari_cyan" />
     </LinearLayout>
 </ScrollView>

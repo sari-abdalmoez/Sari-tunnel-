@@ -1,14 +1,9 @@
-*.iml
 .gradle/
+build/
+**/build/
 local.properties
 .idea/
+*.iml
 .DS_Store
-build/
-app/build/
-captures/
-.externalNativeBuild/
-.cxx/
-*.apk
-*.aab
-*.jks
-*.keystore
+# Generated native Xray AAR (built by Gradle/GitHub Actions from xray-go source)
+app/libs/xray.aar

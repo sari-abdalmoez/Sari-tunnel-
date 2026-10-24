@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "SariTunnelAfrica"
+rootProject.name = "SariVPN"
 include(":app")

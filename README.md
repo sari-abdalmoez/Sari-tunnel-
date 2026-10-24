@@ -1,59 +1,55 @@
-# SariTunnel Africa
+# Sari VPN — Multi-engine Android source
 
-تطبيق Android خفيف لإنشاء نفق VPN عبر بروتوكول WireGuard (UDP) باستخدام محرك WireGuard الرسمي المفتوح المصدر (wireguard-go عبر مكتبة `com.wireguard.android:tunnel`).
+مشروع Android متعدد البروتوكولات يضم ثلاثة مسارات منفصلة. هذه الحزمة **مصدر المشروع** وليست APK تم تجميعه أو اختباره على جهاز في هذه الجلسة.
 
-## ما الذي يعمل فعلاً في هذا الإصدار
-- اتصال نفق WireGuard حقيقي عبر `VpnService` (توجيه كامل للجهاز IPv4).
-- اكتشاف الخوادم من مصدرين فقط: إعدادات WireGuard يدوية (مخصصة للمستخدم) أو ملف JSON عبر HTTPS يحدده المستخدم.
-- ترتيب الخوادم حسب زمن حل اسم المضيف (DNS) وعدد الإخفاقات السابقة.
-- التحقق من النفق بعد الاتصال: حالة الواجهة + طلب HTTPS عبر شبكة VPN إلى `generate_204` يجب أن يُرجع 204.
-- إعادة اتصال تلقائية مع تراجع أُسّي (exponential backoff) وحد أقصى لعدد المحاولات.
-- عداد وقت الاتصال، سرعة التحميل والرفع، وإجمالي البيانات المستخدمة في الجلسة.
-- سجل تشخيص محدود الحجم (150 سطراً) لا يحتوي على مفاتيح أو إعدادات.
-- تخزين الإعدادات المخصصة مشفّراً عبر `EncryptedSharedPreferences`.
+## المحركات
 
-## ما الذي لا يُدعم بعد
-- بروتوكول HTTP CONNECT وSSH غير مفعّلين في هذا الإصدار. يمكن إضافتهما لاحقاً كوحدات منفصلة.
-- لا يُرفق التطبيق أي خادم مجاني. لا توجد هنا عناوين أو بيانات اعتماد مختلقة. عليك توفير إعداد WireGuard مرخّص لك أو رابط ملف خوادم موثوق.
-- زمن DNS ليس زمن المصافحة الفعلية. التحقق الحقيقي هو اختبار حركة المرور بعد الاتصال.
-- اختبار الاتصال بخادم معيّن لا يثبت أن الإنترنت المجاني متاح عبر شركة الاتصالات، فتوفر الشبكات يختلف من دولة لأخرى ومن شركة لأخرى.
+- **VLESS / Xray داخل التطبيق:** يقرأ روابط `vless://` المنشورة في [صفحة Blogger](https://connection7876.blogspot.com/?m=1)، ويبني إعداد Xray ويبدأ نفق Android `VpnService`. مشروع Go bridge في `xray-go/` يُحوّل إلى `app/libs/xray.aar` آلياً عبر `scripts/build-xray-aar.sh`.
+- **WireGuard داخل التطبيق:** يستخدم مكتبة WireGuard Tunnel الرسمية، ويطلب ملف إعداد كامل من مزود الخادم عبر شاشة WireGuard. ملف الإعداد يُخزن باستخدام `EncryptedSharedPreferences`.
+- **OpenVPN:** يستكشف التطبيق ملفات `.ovpn` من IPSpeed ثم يرجع إلى `servers.json` عند فشل المصدر أو إرجاعه 404/صفحة حماية. يرسل الملف إلى **OpenVPN for Android** عبر واجهة AIDL الرسمية؛ يلزم تثبيت التطبيق المرافق والموافقة على الوصول أول مرة. محرك OpenVPN نفسه ليس مضمناً داخل APK.
 
-## صيغة ملف الخوادم (HTTPS JSON)
-```json
-[
-  {
-    "name": "Server A",
-    "country": "SS",
-    "config": "[Interface]\nPrivateKey=...\nAddress=10.8.0.2/32\nDNS=1.1.1.1\n\n[Peer]\nPublicKey=...\nAllowedIPs=0.0.0.0/0\nEndpoint=vpn.example.org:51820"
-  }
-]
-```
-- يجب أن يبدأ الرابط بـ `https://`.
-- الحد الأقصى: 256 KB للملف، و50 خادماً، و8 KB لكل إعداد.
+## مهم عن عناوين الخوادم
 
-## البناء عبر GitHub Actions
-1. أنشئ مستودعاً جديداً على GitHub وارفع محتويات هذا المجلد.
-2. ادخل إلى تبويب Actions وشغّل Workflow باسم `Android Build` (أو انتظر الدفع التالي).
-3. بعد نجاح البناء، حمّل الملف `SariTunnelAfrica-debug` من قسم Artifacts. بداخله ملف APK.
+الرابط الكامل `vless://UUID@HOST:PORT?...` يحمل البروتوكول والمنفذ وبيانات الاتصال المطلوبة. أما `Germany 149.102.146.143` فهو عنوان مرجعي فقط؛ لا يتضمن البروتوكول أو المنفذ أو بيانات المصادقة، ولذلك يعرضه التطبيق كـ IP-only ولا يسمح بالاتصال به. لكي يعمل الخادم، أضف رابط VLESS كاملاً إلى صفحة Blogger، أو ملف `.ovpn` كاملاً إلى `servers.json`، أو إعداد WireGuard كاملاً. لا تُستخدم روابط ملفات تجريبية أو منافذ مخمّنة.
 
-ملاحظة: الـ Workflow يبني نسخة debug. لنشر التطبيق على Google Play تحتاج إلى:
-- مفتاح توقيع (keystore) خاص بك، وبناء `assembleRelease` أو `bundleRelease` مع التوقيع.
-- سياسة الخصوصية، والإفصاح عن استخدام VPN في Play Console.
+## قاعدة مهمة
 
-## البناء محلياً
-```bash
-gradle wrapper --gradle-version 8.7
-./gradlew :app:assembleDebug
-```
+Android يسمح باتصال VPN نشط واحد فقط في الوقت نفسه. افصل المحرك الحالي قبل بدء محرك آخر. ظهور حالة «بدأ المحرك» لا يثبت وحده أن الخادم يعمل أو أن حركة الإنترنت تمر عبر النفق؛ يجب اختبار الاتصال على جهاز حقيقي وخادم صالح.
 
-## استكشاف الأخطاء
-- **فشل البناء بسبب Gradle أو JDK**: تأكد من استخدام JDK 17 وGradle 8.7.
-- **"VPN permission is required"**: وافق على طلب VPN عند أول اتصال.
-- **"No supported server is available"**: أضف إعداد WireGuard أو رابط HTTPS صالحاً في الإعدادات المتقدمة.
-- **"VPN interface did not come up"**: تحقق من صلاحية الإعداد وأن المنفذ UDP غير محجوب من الشبكة.
-- **"Test traffic did not pass through tunnel"**: النفق أُنشئ لكن حركة المرور لا تمر، وهذا غالباً بسبب سياسة الشبكة أو الخادم.
+## البناء بواسطة GitHub Actions
 
-## التراخيص
-- WireGuard Android Tunnel library: راجع ملف LICENSE في مستودعها الرسمي.
-- AndroidX / Material Components / Kotlin Coroutines: Apache License 2.0.
-تأكد من مراجعة تراخيص كل مكتبة قبل النشر.
+ملف `.github/workflows/build.yml` يبني مصدر Xray ثم APK من خلال GitHub Actions. بعد رفع المشروع إلى مستودعك، افتح **Actions → Build Sari VPN APK → Run workflow** أو ادفع commit إلى `main`. بعد نجاح المهمة نزّل artifact باسم `SariVPN-MultiEngine-APK`؛ مدة الاحتفاظ 14 يوماً.
+
+خطوات البناء الآلية:
+
+1. Java 17 وGo 1.26.
+2. Android SDK 35 وNDK `26.1.10909125`.
+3. Gradle 8.13.
+4. Gradle يشغّل `scripts/build-xray-aar.sh` تلقائياً أثناء `preBuild` ثم ينفذ `assembleDebug`.
+
+للبناء المحلي، ثبّت JDK 17 وAndroid SDK/NDK وGo 1.26، واضبط `ANDROID_HOME` و`ANDROID_NDK_HOME`، ثم شغّل `gradle assembleDebug`. البناء الأصلي لـXray يحتاج إلى تنزيل تبعيات Go من الإنترنت.
+
+## قيود وحماية
+
+- روابط VLESS يجب أن تكون كاملة ومتوافقة مع النقل/الأمان المدعومين في `XrayConfigBuilder.kt`. الروابط القديمة أو المنتهية أو التي لا تطابق إعداد الخادم قد تفشل.
+- قائمة Blogger يتم جلبها وقت التحديث؛ لا يضمن التطبيق بقاء خادم عام متاحاً.
+- لا يضمن VPN اتصالاً مجانياً بالبيانات الخلوية، ولا يُعفي من رسوم مزود الشبكة.
+- تجنب إدخال بيانات حساسة عبر خوادم عامة مجهولة.
+- يحتوي المصدر على إشعارات تراخيص ومصادر المكونات في `THIRD-PARTY-NOTICES.md`.
+
+## ملفات رئيسية
+
+- `app/src/main/java/africa/saritunnel/VlessServerCatalogActivity.kt` — قراءة الخلاصة وعرض الروابط الكاملة وعناوين IP غير المكتملة.
+- `app/src/main/java/africa/saritunnel/XrayConfigBuilder.kt` — التحويل من رابط VLESS إلى إعداد Xray.
+- `app/src/main/java/africa/saritunnel/XrayVpnService.kt` — دورة حياة نفق Xray/TUN.
+- `xray-go/xray_bridge.go` — جسر Xray الأصلي وحماية مقابس الاتصال من التوجيه داخل النفق نفسه.
+- `app/src/main/java/africa/saritunnel/WireGuardActivity.kt` — محرك WireGuard وإدخال ملف الإعداد.
+- `app/src/main/java/africa/saritunnel/OpenVpnClient.kt` — التحكم بمحرك OpenVPN المرافق.
+
+## إعداد قائمة الخوادم الاحتياطية
+
+`servers.json` ملف JSON عام يمكن تحديثه من المستودع أو استضافته على موقعك. أضف إلى `servers` العناصر التي تحتوي على `name`, `country`, `ip`, و`url` يشير إلى ملف HTTPS حقيقي ينتهي بـ`.ovpn`. يمكن استخدام `config` بدلاً من `url` لتضمين ملف إعداد كامل إذا كنت تتحكم في الوصول إلى المستودع؛ لا تنشر بيانات دخول خاصة في مستودع عام. عناصر `addresses` تعرض عناوين IP فقط ولا تتيح الاتصال. لا تضف عنواناً إلى `servers` ما لم تتحقق أن رابط الإعداد يُرجع ملف OpenVPN صالحاً.
+
+## حدود الاختبار
+
+هذه حزمة مصدر كاملة وليست APK مختبراً. لا يتوفر في بيئة إعداد الملف اتصال إنترنت لتنزيل مستودعات Gradle/Go أو اختبار خوادم عامة. يجب تشغيل GitHub Actions والتحقق من سجل البناء، ثم اختبار النفق على هاتف فعلي. كما أن نجاح بدء Xray وحده ليس دليلاً كافياً على مرور حركة الإنترنت؛ اختبر عنوان IP الخارجي وDNS بعد الاتصال.

@@ -4,13 +4,46 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+
+    <queries>
+        <package android:name="de.blinkt.openvpn" />
+    </queries>
 
     <application
         android:allowBackup="false"
-        android:icon="@android:drawable/sym_def_app_icon"
+        android:icon="@drawable/ic_sari_vpn"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/Theme.SariTunnel">
+        android:theme="@style/Theme.SariVPN">
+
+        <activity
+            android:name=".VlessServerCatalogActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
+        <activity
+            android:name=".WireGuardActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
+
+        <service
+            android:name=".XrayVpnService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse"
+            android:permission="android.permission.BIND_VPN_SERVICE">
+            <intent-filter>
+                <action android:name="android.net.VpnService" />
+            </intent-filter>
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="vless_xray_vpn_tunnel" />
+        </service>
+
+        <activity
+            android:name=".AdvancedActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity" />
 
         <activity
             android:name=".MainActivity"
@@ -20,36 +53,5 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".OpenVpnCatalogActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
-
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.openvpnfiles"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/openvpn_file_paths" />
-        </provider>
-
-        <activity
-            android:name=".AdvancedActivity"
-            android:exported="false"
-            android:parentActivityName=".MainActivity" />
-
-        <service
-            android:name=".TunnelVpnService"
-            android:exported="false"
-            android:permission="android.permission.BIND_VPN_SERVICE">
-            <intent-filter>
-                <action android:name="android.net.VpnService" />
-            </intent-filter>
-        </service>
-
     </application>
-
 </manifest>

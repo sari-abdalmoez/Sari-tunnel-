@@ -1,6 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.SariTunnel" parent="Theme.Material3.DayNight.NoActionBar">
+    <style name="Theme.SariVPN" parent="Theme.Material3.Dark.NoActionBar">
         <item name="colorPrimary">@color/sari_blue</item>
+        <item name="colorSecondary">@color/sari_cyan</item>
+        <item name="android:colorAccent">@color/sari_cyan</item>
+        <item name="android:statusBarColor">@color/sari_background</item>
+        <item name="android:navigationBarColor">@color/sari_background</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/sari_background</item>
     </style>
 </resources>

@@ -4,16 +4,9 @@ import africa.saritunnel.databinding.ActivityAdvancedBinding
 import android.os.Bundle
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
-import androidx.lifecycle.lifecycleScope
-import com.wireguard.config.Config
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.BufferedReader
-import java.io.StringReader
+import java.net.URL
 
 class AdvancedActivity : AppCompatActivity() {
-
     private lateinit var b: ActivityAdvancedBinding
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -21,50 +14,52 @@ class AdvancedActivity : AppCompatActivity() {
         b = ActivityAdvancedBinding.inflate(layoutInflater)
         setContentView(b.root)
 
-        lifecycleScope.launch {
-            val (feed, cfg) = withContext(Dispatchers.IO) {
-                ConfigStore.feedUrl(this@AdvancedActivity) to
-                    ConfigStore.customConfig(this@AdvancedActivity).orEmpty()
-            }
-            b.feedInput.setText(feed)
-            b.configInput.setText(cfg)
-        }
+        b.feedInput.setText(
+            ConfigStore.feedUrl(this).ifBlank { OpenVpnServerRepository.DEFAULT_FEED_URL }
+        )
+        b.configInput.setText(ConfigStore.customProfile(this))
 
-        b.saveButton.setOnClickListener { save() }
+        b.saveButton.setOnClickListener { saveSettings() }
         b.clearButton.setOnClickListener {
             b.feedInput.setText("")
             b.configInput.setText("")
-            save()
+            ConfigStore.save(this, "", "")
+            toast("Custom settings cleared. The default backup feed will be used.")
         }
     }
 
-    private fun save() {
+    private fun saveSettings() {
         val feed = b.feedInput.text.toString().trim()
-        val cfg = b.configInput.text.toString().trim()
+        val profile = b.configInput.text.toString().trim()
 
-        if (feed.isNotEmpty() && !feed.startsWith("https://")) {
-            toast("Feed URL must start with https://")
-            return
-        }
-        if (cfg.length > 8192) {
-            toast("Configuration is too large")
-            return
-        }
-        if (cfg.isNotEmpty()) {
-            try {
-                Config.parse(BufferedReader(StringReader(cfg)))
-            } catch (e: Exception) {
-                toast("Invalid WireGuard configuration")
+        if (feed.isNotBlank()) {
+            val parsed = try { URL(feed) } catch (_: Exception) {
+                toast("Enter a valid HTTPS JSON feed URL.")
+                return
+            }
+            if (!parsed.protocol.equals("https", ignoreCase = true)) {
+                toast("The backup feed must use HTTPS.")
                 return
             }
         }
-        lifecycleScope.launch(Dispatchers.IO) {
-            ConfigStore.save(this@AdvancedActivity, feed, cfg)
+
+        if (profile.length > 1_000_000) {
+            toast("The OpenVPN profile is too large.")
+            return
         }
-        toast("Saved")
+        if (profile.isNotBlank()) {
+            try {
+                OpenVpnConfigParser.prepare(profile)
+            } catch (e: Exception) {
+                toast(e.message ?: "The OpenVPN profile is invalid.")
+                return
+            }
+        }
+
+        ConfigStore.save(this, feed, profile)
+        toast("Sari VPN settings saved securely.")
+        finish()
     }
 
-    private fun toast(m: String) {
-        Toast.makeText(this, m, Toast.LENGTH_SHORT).show()
-    }
+    private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_LONG).show()
 }
