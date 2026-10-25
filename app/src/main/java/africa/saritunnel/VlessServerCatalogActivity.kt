@@ -30,7 +30,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.util.Locale
 
-/** Imports complete VLESS share URIs from the user's published Blogger page. */
+/** Imports VLESS share URIs from public GitHub subscription feeds. */
 class VlessServerCatalogActivity : AppCompatActivity() {
     data class Entry(val id: String, val label: String, val country: String, val ip: String?, val uri: String?)
 
@@ -75,7 +75,7 @@ class VlessServerCatalogActivity : AppCompatActivity() {
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         root.addView(TextView(this).apply {
-            text = "Source: connection7876.blogspot.com"
+            text = "Sources: FastNodes + Epodonios GitHub feeds"
             textSize = 12f
             setPadding(0, dp(3), 0, dp(8))
             setTextColor(ContextCompat.getColor(this@VlessServerCatalogActivity, R.color.sari_muted))
@@ -121,7 +121,7 @@ class VlessServerCatalogActivity : AppCompatActivity() {
     private fun refreshFeed() {
         progress.visibility = View.VISIBLE
         refresh.isEnabled = false
-        setStatus("Fetching current VLESS links from the Blogger feed…")
+        setStatus("Fetching VLESS links from GitHub subscription feeds…")
         lifecycleScope.launch {
             try {
                 val found = withContext(Dispatchers.IO) { fetchEntries() }
@@ -133,7 +133,7 @@ class VlessServerCatalogActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 entries = emptyList()
                 renderEntries()
-                setStatus("Could not load the Blogger feed: ${e.message ?: e.javaClass.simpleName}. Check the connection and retry.")
+                setStatus("Could not load VLESS feeds: ${e.message ?: e.javaClass.simpleName}. Check the connection and retry.")
             } finally {
                 progress.visibility = View.GONE
                 refresh.isEnabled = true
@@ -142,34 +142,61 @@ class VlessServerCatalogActivity : AppCompatActivity() {
     }
 
     private fun fetchEntries(): List<Entry> {
-        val connection = (URL(BLOG_URL).openConnection() as HttpURLConnection).apply {
-            connectTimeout = 12_000
-            readTimeout = 15_000
-            instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "Mozilla/5.0 (Linux; Android 10) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36")
-            setRequestProperty("Accept", "text/html,application/xhtml+xml")
-        }
-        val html = try {
-            val code = connection.responseCode
-            if (code !in 200..299) throw IOException("Blogger returned HTTP $code")
-            val bytes = connection.inputStream.use { input ->
-                val output = ByteArrayOutputStream()
-                val buffer = ByteArray(8192)
-                while (true) {
-                    val n = input.read(buffer)
-                    if (n < 0) break
-                    if (output.size() + n > MAX_FEED_BYTES) throw IOException("The server page is too large")
-                    output.write(buffer, 0, n)
+        val merged = LinkedHashMap<String, Entry>()
+        val errors = mutableListOf<String>()
+
+        for (feed in SUBSCRIPTION_URLS) {
+            try {
+                val connection = (URL(feed).openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 12000
+                    readTimeout = 18000
+                    instanceFollowRedirects = true
+                    setRequestProperty("User-Agent", "SariTunnel-Android/2.1")
+                    setRequestProperty("Accept", "text/plain,text/*,*/*")
                 }
-                output.toByteArray()
+
+                val text = try {
+                    val code = connection.responseCode
+                    if (code !in 200..299) throw IOException("HTTP $code")
+
+                    val bytes = connection.inputStream.use { input ->
+                        val output = ByteArrayOutputStream()
+                        val buffer = ByteArray(8192)
+                        while (true) {
+                            val n = input.read(buffer)
+                            if (n < 0) break
+                            if (output.size() + n > MAX_FEED_BYTES) {
+                                throw IOException("Feed exceeds size limit")
+                            }
+                            output.write(buffer, 0, n)
+                        }
+                        output.toByteArray()
+                    }
+                    String(bytes, Charsets.UTF_8)
+                } finally {
+                    connection.disconnect()
+                }
+
+                parseEntries(text, feed).forEach { entry ->
+                    entry.uri?.let { merged.putIfAbsent(it, entry) }
+                }
+            } catch (e: Exception) {
+                errors += "${feed.substringAfter("github.com/").take(45)}: ${e.message ?: e.javaClass.simpleName}"
             }
-            String(bytes, Charsets.UTF_8)
-        } finally { connection.disconnect() }
-        return parseEntries(html)
+        }
+
+        if (merged.isEmpty()) {
+            throw IOException(
+                if (errors.isEmpty()) "No valid VLESS links were found."
+                else "GitHub feeds failed or had no valid VLESS links: ${errors.joinToString("; ")}"
+            )
+        }
+
+        return merged.values.take(MAX_ENTRIES)
     }
 
-    internal fun parseEntries(html: String): List<Entry> {
-        val doc = Jsoup.parse(html, BLOG_URL)
+    internal fun parseEntries(html: String, sourceUrl: String = SUBSCRIPTION_URLS.first()): List<Entry> {
+        val doc = Jsoup.parse(html, sourceUrl)
         val decodedHtml = html.replace("&amp;", "&", ignoreCase = true)
         val result = LinkedHashMap<String, Entry>()
         val linkedCountries = HashMap<String, String>()
@@ -315,7 +342,10 @@ class VlessServerCatalogActivity : AppCompatActivity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
 
     companion object {
-        const val BLOG_URL = "https://connection7876.blogspot.com/?m=1"
+        private val SUBSCRIPTION_URLS = listOf(
+            "https://raw.githubusercontent.com/rtwo2/FastNodes/main/sub/protocols/vless.txt",
+            "https://raw.githubusercontent.com/Epodonios/v2ray-configs/main/All_Configs_Sub.txt"
+        )
         private const val MAX_FEED_BYTES = 2 * 1024 * 1024
         private const val MAX_ENTRIES = 150
         private val VLESS_REGEX = Regex("(?i)vless://[^\\s\\\"'<>]+")
