@@ -229,7 +229,7 @@ class OpenVpnActivity : AppCompatActivity() {
         b.statusMessage.text = "Looking for OpenVPN profiles…"
         lifecycleScope.launch {
             try {
-                val loaded = OpenVpnServerRepository.loadServers(this@MainActivity, forceRefresh = force)
+                val loaded = OpenVpnServerRepository.loadServers(this@OpenVpnActivity, forceRefresh = force)
                 servers = loaded
                 renderServerRows()
                 val customFirst = loaded.firstOrNull()?.country == "Custom"
@@ -269,7 +269,7 @@ class OpenVpnActivity : AppCompatActivity() {
         if (servers.isEmpty()) {
             val empty = TextView(this).apply {
                 text = "No server entries are available. Try Refresh or configure another HTTPS JSON feed in Advanced settings."
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.sari_muted))
+                setTextColor(ContextCompat.getColor(this@OpenVpnActivity, R.color.sari_muted))
                 textSize = 13f
                 setPadding(dp(8), dp(16), dp(8), dp(16))
             }
@@ -281,9 +281,9 @@ class OpenVpnActivity : AppCompatActivity() {
             val card = MaterialCardView(this).apply {
                 radius = dp(16).toFloat()
                 cardElevation = 0f
-                setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.sari_surface))
+                setCardBackgroundColor(ContextCompat.getColor(this@OpenVpnActivity, R.color.sari_surface))
                 strokeWidth = dp(1)
-                setStrokeColor(ContextCompat.getColor(this@MainActivity, R.color.sari_surface_alt))
+                setStrokeColor(ContextCompat.getColor(this@OpenVpnActivity, R.color.sari_surface_alt))
                 setContentPadding(dp(13), dp(12), dp(10), dp(12))
             }
             val row = LinearLayout(this).apply {
@@ -295,14 +295,14 @@ class OpenVpnActivity : AppCompatActivity() {
             }
             val title = TextView(this).apply {
                 text = if (server.country == "Custom") server.name else "${server.country.ifBlank { "Unknown location" }}  ·  ${server.ip}"
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.sari_text))
+                setTextColor(ContextCompat.getColor(this@OpenVpnActivity, R.color.sari_text))
                 textSize = 14f
                 setTypeface(typeface, android.graphics.Typeface.BOLD)
             }
             val connectable = !server.profileUrl.isNullOrBlank() || !server.inlineProfile.isNullOrBlank()
             val detail = TextView(this).apply {
                 text = if (!connectable) "IP address only · add a valid .ovpn profile before connecting" else if (server.reportedPingMs != null) "OpenVPN  ·  reported ping ${server.reportedPingMs} ms" else "OpenVPN  ·  latency not supplied"
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.sari_muted))
+                setTextColor(ContextCompat.getColor(this@OpenVpnActivity, R.color.sari_muted))
                 textSize = 11f
                 setPadding(0, dp(4), 0, 0)
             }
