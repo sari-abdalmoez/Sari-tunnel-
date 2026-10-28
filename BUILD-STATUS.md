@@ -1,15 +1,19 @@
-# Build status for this handoff
+# Build status
 
-- Source package assembled with in-app WireGuard (official tunnel library), VLESS/Xray source bridge and TUN service, Blogger feed parser, and OpenVPN external-API control.
-- XML files and the manifest/layout ID references were statically checked in the preparation environment.
-- The Kotlin compiler was used as a parser check; full Kotlin/Android type-checking was not possible because the Android SDK and Android dependency classpath are absent here.
-- **No APK was produced or device-tested in this session.** This environment has no installed Gradle or Android SDK/NDK, and I could not trigger a build in the user's GitHub repository because GitHub write/dispatch permissions were unavailable.
-- The included GitHub Actions workflow is prepared to compile the Xray AAR and then assemble a debug APK. Its result must be confirmed by a successful workflow run before treating the APK as release-ready.
+**Version 2.2.0 — source modified; APK not built in the editing environment.**
 
+The editing sandbox has no Android SDK, Gradle, Go or network access, so the Kotlin code could not be compiled here and nothing was run on a device. What was checked statically: XML well-formedness, bracket balance, that every view-binding id and R.* resource referenced from Kotlin exists, and that no code references the removed classes.
 
-## Follow-up source improvements (2026-10-24)
+The authoritative check is the GitHub Actions run:
 
-- Removed hard-coded example OpenVPN download URLs that were not verified and could return 404. The fallback feed now starts empty for actual `.ovpn` profiles rather than pretending sample URLs are live.
-- Added a separate `addresses` list for directory-only IP addresses, including the supplied Germany address `149.102.146.143`. Such entries are explicitly non-connectable until a complete profile is configured.
-- Added fallback-feed parsing for IP-only entries and disabled CONNECT on those rows to prevent misleading attempts.
-- This source package still requires GitHub Actions and real-device tests; it has not been built or network-validated in this environment.
+1. Push to `main` (or Actions -> *Build Sari VPN APK* -> Run workflow).
+2. The workflow installs Java 17, Go (version from `xray-go/go.mod`), Android SDK 35 + NDK 26.1.10909125, builds `app/libs/xray.aar` with `scripts/build-xray-aar.sh`, then runs `gradle :app:assembleDebug -x buildXrayAar` (Gradle 8.13).
+3. Download the `SariVPN-MultiEngine-APK` artifact (kept 14 days).
+
+Not verifiable without that run / a phone: that the Xray Go bridge still compiles against the pinned xray-core version, that the Blogger servers currently accept connections, and real-world speed. If the workflow fails, the log shows the exact line.
+
+## 2.2.0 changes
+- New Home / Location / Settings UI; VLESS feed limited to the Blogger post; 24-hour cached refresh; latency testing and grouped/sorted server list; in-tunnel traffic verification before showing "Connected".
+- OpenVPN and Tor screens moved to `OpenVpnActivity` (Settings -> OpenVPN & Tor engines), behaviour unchanged.
+- Removed: `VlessServerCatalogActivity`, `AutoServerSelector` (superseded).
+- Restored `.github/workflows/build.yml`.

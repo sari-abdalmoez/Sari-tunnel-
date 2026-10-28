@@ -13,6 +13,7 @@ class AdvancedActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         b = ActivityAdvancedBinding.inflate(layoutInflater)
         setContentView(b.root)
+        b.root.applySystemBarInsets()
 
         b.feedInput.setText(
             ConfigStore.feedUrl(this).ifBlank { OpenVpnServerRepository.DEFAULT_FEED_URL }

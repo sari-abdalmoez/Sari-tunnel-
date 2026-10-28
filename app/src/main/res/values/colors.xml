@@ -1,12 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="sari_background">#0B1220</color>
-    <color name="sari_surface">#121E30</color>
-    <color name="sari_surface_alt">#1A2940</color>
-    <color name="sari_blue">#4DA3FF</color>
-    <color name="sari_cyan">#65E0D2</color>
-    <color name="sari_green">#51D18B</color>
-    <color name="sari_amber">#FFBF69</color>
-    <color name="sari_text">#F4F7FB</color>
-    <color name="sari_muted">#AAB8CC</color>
+    <!-- Light SariTunnel palette. Names are unchanged so the OpenVPN/Tor screens follow the same theme. -->
+    <color name="sari_background">#FFFFFF</color>
+    <color name="sari_surface">#F6F8FB</color>
+    <color name="sari_surface_alt">#E9EEF4</color>
+    <color name="sari_line">#E1E7EF</color>
+    <color name="sari_blue">#1F8FE5</color>
+    <color name="sari_cyan">#12B5A5</color>
+    <color name="sari_green">#1FA971</color>
+    <color name="sari_amber">#D98200</color>
+    <color name="sari_danger">#E5473E</color>
+    <color name="sari_text">#101828</color>
+    <color name="sari_muted">#667085</color>
+    <color name="sari_dark_pill">#1B1D21</color>
 </resources>

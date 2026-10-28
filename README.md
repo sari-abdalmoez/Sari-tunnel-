@@ -1,6 +1,6 @@
-# Sari VPN — Multi-engine Android source
+# SariTunnel Africa — Multi-engine Android source
 
-مشروع Android متعدد البروتوكولات يضم ثلاثة مسارات منفصلة. هذه الحزمة **مصدر المشروع** وليست APK تم تجميعه أو اختباره على جهاز في هذه الجلسة.
+مشروع Android متعدد البروتوكولات يضم ثلاثة مسارات منفصلة. هذه الحزمة **مصدر المشروع**؛ يُبنى APK عبر GitHub Actions ولم يُختبر على جهاز في هذه الجلسة.
 
 ## المحركات
 
@@ -39,11 +39,13 @@ Android يسمح باتصال VPN نشط واحد فقط في الوقت نفس�
 
 ## ملفات رئيسية
 
-- `app/src/main/java/africa/saritunnel/VlessServerCatalogActivity.kt` — قراءة الخلاصة وعرض الروابط الكاملة وعناوين IP غير المكتملة.
+- `app/src/main/java/africa/saritunnel/MainActivity.kt` — الواجهة الرئيسية (Home / Location / Settings) لمحرك VLESS: الاتصال، اختيار الخادم، الفرز، اختبار الـ ping.
+- `app/src/main/java/africa/saritunnel/VlessSubscriptionManager.kt` — جلب وتحليل روابط `vless://` من Blogger، التخزين المحلي، والتحديث كل 24 ساعة.
+- `app/src/main/java/africa/saritunnel/LatencyTester.kt` — قياس زمن اتصال TCP لكل خادم (لا يُشغَّل أثناء اتصال VPN).
+- `app/src/main/java/africa/saritunnel/OpenVpnActivity.kt` — شاشة OpenVPN وTor السابقة (من Settings ← OpenVPN & Tor engines).
 - `app/src/main/java/africa/saritunnel/XrayConfigBuilder.kt` — التحويل من رابط VLESS إلى إعداد Xray.
 - `app/src/main/java/africa/saritunnel/XrayVpnService.kt` — دورة حياة نفق Xray/TUN.
 - `xray-go/xray_bridge.go` — جسر Xray الأصلي وحماية مقابس الاتصال من التوجيه داخل النفق نفسه.
-- `app/src/main/java/africa/saritunnel/MainActivity.kt` — اختيار المحرك، الاتصال/الإيقاف، والاختيار التلقائي لأقل ping منشور في OpenVPN.
 - `app/src/main/java/africa/saritunnel/OpenVpnClient.kt` — التحكم بمحرك OpenVPN المرافق.
 
 ## إعداد قائمة الخوادم الاحتياطية
@@ -61,3 +63,14 @@ Android يسمح باتصال VPN نشط واحد فقط في الوقت نفس�
 - Xray does not enable payload compression by default in this configuration.
 - BBR is a server-side Linux TCP congestion-control setting. It can only be enabled on a VPS the operator controls; the Android app cannot enable it on a third-party server.
 - OpenVPN automatic selection prioritizes the lowest published ping among complete profiles. Published ping can be stale; existing connection verification and failover still determine whether a profile actually works.
+
+
+## الإصدار 2.2.0 — واجهة جديدة وتغذية Blogger فقط
+
+- **المصدر الوحيد لخوادم VLESS:** `https://connection7876.blogspot.com/2026/10/blog-post.html`. أُزيلت مصادر GitHub غير المرتبطة، ويُحذف أي كاش قديم منها عند أول تشغيل.
+- **التحليل:** الصفحة تضع اسم الدولة في السطر الذي يسبق كل رابط؛ يُستخدم هذا الاسم أولاً، ثم رمز الدولة داخل اسم الخادم (مثل `vless-au_xxxxx`)، ثم نطاق الدولة في اسم المضيف، وأخيراً استعلام اختياري إلى `ipwho.is` (HTTPS، حتى 30 استعلاماً لكل تحديث) للخوادم التي يتعذر تحديد دولتها. الروابط المقتطعة (`...`) تُتجاهل.
+- **الكاش:** `files/vless_servers.json`. يُعرض فوراً عند فتح التطبيق، ويُحدَّث تلقائياً كل 24 ساعة (WorkManager + فحص عند الفتح). عند فشل الشبكة يبقى الكاش كما هو.
+- **الاختبار:** زمن اتصال TCP يُقاس لكل منفذ فريد (6 اختبارات متوازية). هذا يثبت أن المنفذ يستجيب فقط. حالة «Connected» لا تظهر إلا بعد نجاح طلب HTTPS فعلي عبر النفق؛ وإلا يُغلق النفق ويُعرض الفشل. «Fastest» لا يُعرض إلا لخادم تم اختباره.
+- **الفرز:** Fastest (أقل ping)، Best (ping مع تعديل بحسب نتائج الاتصال الفعلية السابقة)، Country (أبجدياً). التجميع حسب الدولة دائماً، ويمكن طيّ كل دولة.
+- **إصلاحات المحرك:** دعم `type=raw` (مرادف TCP في Xray) الذي تستخدمه الصفحة، وحلّ اسم المضيف قبل إنشاء النفق مع الحفاظ على SNI وHost، وإعادة تشغيل النفق عند تبديل الخادم، ومعالجة `onRevoke`.
+- **سير البناء:** أُعيد إنشاء `.github/workflows/build.yml` (كان مذكوراً في README لكنه غير موجود في الـ ZIP).

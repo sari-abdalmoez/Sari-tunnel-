@@ -1,592 +1,594 @@
 package africa.saritunnel
 
 import africa.saritunnel.databinding.ActivityMainBinding
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import android.net.VpnService
 import android.os.Bundle
-import android.os.SystemClock
-import android.view.Gravity
+import android.text.format.DateUtils
 import android.view.View
-import android.widget.LinearLayout
-import android.widget.TextView
 import android.widget.Toast
-import java.net.HttpURLConnection
-import java.net.URL
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
-import com.google.android.material.button.MaterialButton
-import com.google.android.material.card.MaterialCardView
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.recyclerview.widget.LinearLayoutManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
-import java.util.Date
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
 
+/**
+ * Home / Location / Settings screens for the VLESS (Xray) tunnel.
+ * OpenVPN and Tor controls live on [OpenVpnActivity] and are reachable from Settings.
+ */
 class MainActivity : AppCompatActivity() {
+    private enum class Tab { HOME, LOCATION, SETTINGS }
+
     private lateinit var b: ActivityMainBinding
-    private lateinit var vpnClient: OpenVpnClient
+    private lateinit var manager: VlessSubscriptionManager
+    private lateinit var adapter: ServerAdapter
+    private val prefs by lazy { getSharedPreferences("sari_home_prefs", MODE_PRIVATE) }
 
-    private var servers: List<OpenVpnServer> = emptyList()
-    private var currentServer: OpenVpnServer? = null
-    private var returningFromAdvancedSettings = false
-    private var selectedProtocol = "OPENVPN"
-    private var autoConnectAfterRefresh = false
-    private var torLaunchRequested = false
-    private var vlessLaunchRequested = false
-    private val connectionPrefs by lazy { getSharedPreferences("sari_connection_prefs", MODE_PRIVATE) }
-    private var stableServerEnabled = true
-    private var pinnedServerIdentity: String? = null
-    private var currentIndex = -1
-    private var generation = 0
-    private var attemptsSinceSelection = 0
-    private var isAttemptActive = false
-    private var isConnected = false
-    private var isVerifying = false
-    private var manualStop = false
-    private var retryQueued = false
-    private var startedAtElapsed = 0L
-    private var connectedAtWallClock = 0L
-    private var connectionWatchdog: Job? = null
-    private var retryJob: Job? = null
+    private var servers: List<VlessServer> = emptyList()
+    private var fetchedAt = 0L
+    private var lastError: String? = null
 
-    private val consentLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (::vpnClient.isInitialized) vpnClient.onPermissionResult(result.resultCode == RESULT_OK)
+    /** null means "Auto": the fastest server found by the latency test. */
+    private var selectedId: String? = null
+    private var sortMode = SortMode.FASTEST
+    private val collapsed = mutableSetOf<String>()
+    private var tab = Tab.HOME
+
+    private var refreshing = false
+    private var testing = false
+    private var testDone = 0
+    private var testTotal = 0
+    private var testJob: Job? = null
+    private var lastListRender = 0L
+
+    private var pendingServer: VlessServer? = null
+    private val autoQueue = ArrayDeque<VlessServer>()
+    private var userWantsConnection = false
+    private var lastState = TunnelState.State()
+    private var logVisible = false
+
+    private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val server = pendingServer
+        pendingServer = null
+        if (result.resultCode == RESULT_OK && server != null) {
+            startTunnel(server)
+        } else {
+            userWantsConnection = false
+            toast("Android VPN permission is required to connect.")
+            render()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         b = ActivityMainBinding.inflate(layoutInflater)
         setContentView(b.root)
+        b.rootLayout.applySystemBarInsets()
 
-        vpnClient = OpenVpnClient(
-            activity = this,
-            launchConsent = { intent -> consentLauncher.launch(intent) },
-            onStatus = ::handleVpnStatus,
-            onStarted = ::handleVpnStarted,
-            onError = ::handleClientError
-        )
+        manager = VlessSubscriptionManager(this)
+        SubscriptionUpdateWorker.schedulePeriodicUpdates(this)
 
-        stableServerEnabled = connectionPrefs.getBoolean("stable_server_enabled", true)
-        pinnedServerIdentity = connectionPrefs.getString("pinned_server_identity", null)
-        b.stableServerButton.setOnClickListener {
-            stableServerEnabled = !stableServerEnabled
-            connectionPrefs.edit().putBoolean("stable_server_enabled", stableServerEnabled).apply()
-            updateStableServerButton()
-            b.statusMessage.text = if (stableServerEnabled) "STABLE mode: keep the selected server; no automatic server switching." else "AUTO mode: try the next server if the current one fails."
-        }
-        b.openVpnButton.setOnClickListener { selectProtocol("OPENVPN") }
-        b.vlessServersButton.setOnClickListener { selectProtocol("VLESS") }
-        b.torButton.setOnClickListener { selectProtocol("TOR") }
-        b.startButton.setOnClickListener {
-            if (isAttemptActive || isConnected) disconnectByUser()
-            else when (selectedProtocol) {
-                "OPENVPN" -> { autoConnectAfterRefresh = true; refreshServers(force = true) }
-                "VLESS" -> { if (vlessLaunchRequested) stopVlessFromMain() else { openProtocol(VlessServerCatalogActivity::class.java); vlessLaunchRequested = true; updateStartButton() } }
-                "TOR" -> launchOrManageTor()
+        selectedId = prefs.getString(KEY_SELECTED, null)
+        sortMode = runCatching { SortMode.valueOf(prefs.getString(KEY_SORT, SortMode.FASTEST.name)!!) }
+            .getOrDefault(SortMode.FASTEST)
+
+        adapter = ServerAdapter(
+            onSelect = ::onServerPicked,
+            onCopy = ::copyLink,
+            onToggleCountry = { code ->
+                if (!collapsed.add(code)) collapsed.remove(code)
+                renderList()
             }
+        )
+        b.serverList.layoutManager = LinearLayoutManager(this)
+        b.serverList.adapter = adapter
+
+        b.navHome.setOnClickListener { showTab(Tab.HOME) }
+        b.navLocation.setOnClickListener { showTab(Tab.LOCATION) }
+        b.navSettings.setOnClickListener { showTab(Tab.SETTINGS) }
+        b.connectButton.setOnClickListener { onPowerTapped() }
+        b.tvHint.setOnClickListener { onPowerTapped() }
+        b.cardServer.setOnClickListener { showTab(Tab.LOCATION) }
+        b.btnRefresh.setOnClickListener { refreshAndTest(manual = true) }
+        b.btnRefreshNow.setOnClickListener { refreshAndTest(manual = true) }
+        b.btnTestAll.setOnClickListener { testServers(manual = true) }
+        b.btnRetest.setOnClickListener { testServers(manual = true) }
+        b.chipFastest.setOnClickListener { setSort(SortMode.FASTEST) }
+        b.chipBest.setOnClickListener { setSort(SortMode.BEST) }
+        b.chipCountry.setOnClickListener { setSort(SortMode.COUNTRY) }
+        b.btnOpenVpn.setOnClickListener { startActivity(Intent(this, OpenVpnActivity::class.java)) }
+        b.btnAdvanced.setOnClickListener { startActivity(Intent(this, AdvancedActivity::class.java)) }
+        b.btnLogToggle.setOnClickListener {
+            logVisible = !logVisible
+            b.tvLog.visibility = if (logVisible) View.VISIBLE else View.GONE
+            b.btnLogToggle.text = if (logVisible) "Hide connection log" else "Show connection log"
         }
-        b.refreshServersButton.setOnClickListener {
-            if (isAttemptActive || isConnected) {
-                toast("Disconnect before refreshing the server list.")
-            } else refreshServers(force = true)
-        }
-        b.advancedButton.setOnClickListener {
-            returningFromAdvancedSettings = true
-            startActivity(Intent(this, AdvancedActivity::class.java))
-        }
-        b.diagToggle.setOnClickListener {
-            val show = b.diagPanel.visibility != View.VISIBLE
-            b.diagPanel.visibility = if (show) View.VISIBLE else View.GONE
-            b.diagToggle.text = if (show) "Hide connection log" else "Show connection log"
-        }
+
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                if (tab != Tab.HOME) showTab(Tab.HOME) else {
+                    isEnabled = false
+                    onBackPressedDispatcher.onBackPressed()
+                }
+            }
+        })
+
+        // Cached servers are shown immediately, before any network request.
+        loadCache()
+        showTab(Tab.HOME)
+        render()
 
         lifecycleScope.launch {
-            while (isActive) {
-                if (isConnected && connectedAtWallClock > 0L) {
-                    val seconds = ((System.currentTimeMillis() - connectedAtWallClock) / 1000).coerceAtLeast(0)
-                    b.elapsedText.text = String.format(
-                        Locale.US, "%02d:%02d:%02d", seconds / 3600, (seconds / 60) % 60, seconds % 60
-                    )
-                } else if (!isAttemptActive) {
-                    b.elapsedText.text = "00:00:00"
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                launch { TunnelState.state.collect { onTunnelState(it) } }
+                launch { TunnelState.log.collect { lines -> b.tvLog.text = lines.joinToString("\n") } }
+                launch {
+                    while (isActive) {
+                        updateTimer()
+                        delay(1_000)
+                    }
                 }
-                delay(1_000)
             }
         }
 
-        updateProtocolButtons()
-        updateStableServerButton()
-        updateStartButton()
-        appendLog("Sari VPN ready. Loading OpenVPN profiles.")
-        refreshServers(force = false)
+        startupWork()
     }
 
-    override fun onResume() {
-        super.onResume()
-        if (::b.isInitialized && returningFromAdvancedSettings) {
-            returningFromAdvancedSettings = false
-            if (!isAttemptActive && !isConnected) refreshServers(force = true)
+    override fun onStart() {
+        super.onStart()
+        // Coming back after a long time: refresh when the 24-hour window has passed.
+        if (::manager.isInitialized && !refreshing && !TunnelState.isActive() && manager.shouldRefresh()) {
+            refreshAndTest(manual = false)
         }
     }
 
-    private fun openProtocol(destination: Class<*>) {
-        if (isAttemptActive || isConnected) {
-            AlertDialog.Builder(this)
-                .setTitle("Switch VPN engine?")
-                .setMessage("OpenVPN is active or still connecting. Disconnect it before switching to VLESS or Tor VPN; Android only supports one active VPN at a time.")
-                .setNegativeButton("Cancel", null)
-                .setPositiveButton("Disconnect and continue") { _, _ ->
-                    disconnectByUser()
-                    startActivity(Intent(this, destination))
+    // ------------------------------------------------------------------ data
+
+    private fun loadCache() {
+        val snap = manager.loadSnapshot()
+        servers = snap.servers
+        fetchedAt = snap.fetchedAt
+        lastError = snap.lastError
+        if (selectedId != null && servers.none { it.id == selectedId }) {
+            selectedId = null
+            prefs.edit().remove(KEY_SELECTED).apply()
+        }
+    }
+
+    private fun startupWork() {
+        val snap = manager.loadSnapshot()
+        when {
+            manager.shouldRefresh(snap) -> refreshAndTest(manual = false)
+            servers.isNotEmpty() && !TunnelState.isActive() && needsRetest() -> testServers(manual = false)
+        }
+    }
+
+    private fun needsRetest(): Boolean {
+        val newest = servers.maxOfOrNull { it.testedAt } ?: 0L
+        return servers.any { it.reachable == null } || System.currentTimeMillis() - newest > RETEST_AFTER_MS
+    }
+
+    private fun refreshAndTest(manual: Boolean) {
+        if (refreshing) return
+        refreshing = true
+        TunnelState.log("Refreshing servers from the Blogger source…")
+        render()
+        lifecycleScope.launch {
+            val result = manager.refresh()
+            val oldSelected = selectedId
+            loadCache()
+            refreshing = false
+            when (result) {
+                is VlessSubscriptionManager.RefreshResult.Ok -> {
+                    TunnelState.log("Server list updated: ${result.count} server(s).")
+                    if (manual) toast("${result.count} servers loaded.")
                 }
-                .show()
-        } else startActivity(Intent(this, destination))
+                is VlessSubscriptionManager.RefreshResult.Error -> {
+                    TunnelState.log("Refresh failed: ${result.message}. Keeping ${servers.size} cached server(s).")
+                    if (manual) toast(
+                        if (servers.isEmpty()) "Could not load servers: ${result.message}"
+                        else "Refresh failed. Showing ${servers.size} cached servers."
+                    )
+                }
+            }
+            if (oldSelected != null && selectedId == null) TunnelState.log("The previously selected server is no longer listed; using Auto.")
+            render()
+            if (servers.isNotEmpty() && !TunnelState.isActive()) testServers(manual = false)
+        }
     }
 
-    private fun selectProtocol(protocol: String) {
-        if (isAttemptActive || isConnected) { toast("Stop the current VPN before changing protocol."); return }
-        selectedProtocol = protocol
-        updateProtocolButtons(); updateStartButton()
-        b.statusMessage.text = when (protocol) {
-            "OPENVPN" -> "OpenVPN selected · auto-pick the lowest reported-ping complete profile."
-            "VLESS" -> "VLESS / Xray selected · load your published server links."
-            else -> "Tor VPN selected · uses the official Tor VPN app for Android."
+    private fun testServers(manual: Boolean) {
+        if (testing) return
+        if (servers.isEmpty()) {
+            if (manual) toast("No servers to test yet.")
+            return
+        }
+        if (TunnelState.isActive()) {
+            if (manual) toast("Disconnect first. Ping measured through the VPN would be wrong.")
+            return
+        }
+        testing = true
+        testDone = 0
+        testTotal = servers.map { it.endpointKey }.toSet().size
+        val partial = ConcurrentHashMap<String, LatencyTester.Result>()
+        TunnelState.log("Testing TCP latency of $testTotal endpoint(s)…")
+        render()
+        testJob = lifecycleScope.launch {
+            try {
+                LatencyTester.test(servers) { key, result ->
+                    partial[key] = result
+                    val now = System.currentTimeMillis()
+                    servers = servers.map { s ->
+                        if (s.endpointKey == key) s.copy(reachable = result.reachable, pingMs = result.pingMs, testedAt = now) else s
+                    }
+                    testDone++
+                    if (now - lastListRender > 300 || testDone == testTotal) {
+                        lastListRender = now
+                        render()
+                    }
+                }
+            } finally {
+                manager.saveLatency(partial)
+                testing = false
+                val ok = servers.count { it.reachable == true }
+                TunnelState.log("Latency test finished: $ok of ${servers.size} server(s) answered.")
+                render()
+            }
         }
     }
-    private fun serverIdentity(server: OpenVpnServer): String = server.id.ifBlank { "${server.country}|${server.ip}|${server.profileUrl.orEmpty()}" }
 
-    private fun updateStableServerButton() {
-        if (!::b.isInitialized) return
-        b.stableServerButton.text = if (stableServerEnabled) "STABLE: ON" else "AUTO: FASTEST"
-        val color = if (stableServerEnabled) R.color.sari_blue else R.color.sari_surface_alt
-        b.stableServerButton.backgroundTintList = android.content.res.ColorStateList.valueOf(ContextCompat.getColor(this, color))
-        b.stableServerButton.setTextColor(ContextCompat.getColor(this, R.color.sari_text))
+    // --------------------------------------------------------------- actions
+
+    private fun onPowerTapped() {
+        when (lastState.phase) {
+            TunnelState.Phase.CONNECTING, TunnelState.Phase.VERIFYING, TunnelState.Phase.CONNECTED -> disconnect()
+            TunnelState.Phase.DISCONNECTING -> Unit
+            else -> if (userWantsConnection) {
+                // Tapped while waiting for the latency test: cancel the pending connect.
+                userWantsConnection = false
+                render()
+            } else connect()
+        }
     }
 
-    private fun updateProtocolButtons() {
-        val selected = ContextCompat.getColor(this, R.color.sari_blue)
-        val idle = ContextCompat.getColor(this, R.color.sari_surface_alt)
-        listOf(b.openVpnButton to "OPENVPN", b.vlessServersButton to "VLESS", b.torButton to "TOR").forEach { (button, protocol) ->
-            button.backgroundTintList = android.content.res.ColorStateList.valueOf(if (selectedProtocol == protocol) selected else idle)
-            button.setTextColor(ContextCompat.getColor(this, R.color.sari_text))
+    private fun connect() {
+        if (servers.isEmpty()) {
+            toast("No servers yet. Updating the list…")
+            refreshAndTest(manual = false)
+            return
+        }
+        userWantsConnection = true
+        autoQueue.clear()
+        val chosen = selectedId?.let { id -> servers.firstOrNull { it.id == id } }
+        if (chosen != null) {
+            if (testing) testJob?.cancel()
+            requestConnect(chosen)
+            return
+        }
+        // Auto mode: only a server that answered the latency test can be called the fastest.
+        render()
+        lifecycleScope.launch {
+            if (servers.none { it.reachable == true }) {
+                if (!testing) testServers(manual = false)
+                testJob?.join()
+            }
+            if (!userWantsConnection) return@launch
+            val ranked = servers.filter { it.reachable == true }.sortedBy { it.pingMs }
+            if (ranked.isEmpty()) {
+                userWantsConnection = false
+                toast("No server answered the ping test. Check your network or refresh the list.")
+                render()
+                return@launch
+            }
+            autoQueue.addAll(ranked.drop(1).take(MAX_AUTO_FALLBACKS))
+            requestConnect(ranked.first())
         }
     }
-    private fun updateStartButton() {
-        b.startButton.text = when {
-            isAttemptActive || isConnected -> "STOP VPN"
-            selectedProtocol == "TOR" && torLaunchRequested -> "MANAGE TOR VPN"
-            selectedProtocol == "VLESS" && vlessLaunchRequested -> "STOP VLESS"
-            else -> "CONNECT"
+
+    private fun requestConnect(server: VlessServer) {
+        val consent = VpnService.prepare(this)
+        if (consent == null) {
+            startTunnel(server)
+        } else {
+            pendingServer = server
+            vpnConsent.launch(consent)
         }
     }
-    private fun launchOrManageTor() {
-        if (torLaunchRequested) {
-            try { startActivity(Intent(android.provider.Settings.ACTION_VPN_SETTINGS)); b.statusMessage.text = "VPN settings opened. Disconnect Tor there; Android does not let Sari directly stop another app's VPN." }
-            catch (_: Exception) { toast("Open Android Settings → VPN to disconnect Tor VPN.") }
-            torLaunchRequested = false; updateStartButton(); return
+
+    private fun startTunnel(server: VlessServer) {
+        try {
+            ContextCompat.startForegroundService(
+                this,
+                Intent(this, XrayVpnService::class.java)
+                    .setAction(XrayVpnService.ACTION_START)
+                    .putExtra(XrayVpnService.EXTRA_URI, server.uri)
+                    .putExtra(XrayVpnService.EXTRA_SERVER_ID, server.id)
+                    .putExtra(XrayVpnService.EXTRA_SERVER_NAME, server.name)
+            )
+            TunnelState.update(TunnelState.Phase.CONNECTING, server.id, "Connecting to ${server.name}…")
+        } catch (e: Exception) {
+            userWantsConnection = false
+            val msg = "Could not start the VPN service: ${e.message ?: e.javaClass.simpleName}"
+            TunnelState.update(TunnelState.Phase.FAILED, server.id, msg)
+            TunnelState.log(msg)
         }
-        val torIntent = packageManager.getLaunchIntentForPackage("org.torproject.vpn")
-        if (torIntent != null) {
-            startActivity(torIntent); torLaunchRequested = true
-            b.statusTitle.text = "TOR VPN"
-            b.statusMessage.text = "Official Tor VPN opened. Start the connection in that app, then return here to manage it."
-            updateStartButton()
-        } else AlertDialog.Builder(this).setTitle("Install Tor VPN")
-            .setMessage("Tor VPN is a separate official Android app. Install it from the Tor Project, then return and tap Connect.")
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Official download") { _, _ -> startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://download.torproject.org/tor-vpn-for-android/"))) }.show()
     }
-    private fun stopVlessFromMain() {
+
+    private fun disconnect() {
+        userWantsConnection = false
+        autoQueue.clear()
         try {
             startService(Intent(this, XrayVpnService::class.java).setAction(XrayVpnService.ACTION_STOP))
-            b.statusTitle.text = "VLESS STOP REQUESTED"; b.statusMessage.text = "A disconnect request was sent to the Xray service."
-            appendLog("VLESS stop requested from the main screen.")
-        } catch (e: Exception) { toast("Could not stop VLESS: ${e.message ?: e.javaClass.simpleName}") }
-        finally { vlessLaunchRequested = false; updateStartButton() }
-    }
-
-    private fun refreshServers(force: Boolean) {
-        b.serverProgress.visibility = View.VISIBLE
-        b.refreshServersButton.isEnabled = false
-        b.statusMessage.text = "Looking for OpenVPN profiles…"
-        lifecycleScope.launch {
-            try {
-                val loaded = OpenVpnServerRepository.loadServers(this@MainActivity, forceRefresh = force)
-                servers = loaded
-                renderServerRows()
-                val customFirst = loaded.firstOrNull()?.country == "Custom"
-                b.statusTitle.text = "${loaded.size} SERVERS READY"
-                b.statusMessage.text = if (loaded.isEmpty()) "No usable servers were found." else
-                    "Sorted by the published ping. Failed connections move to the next candidate automatically."
-                appendLog("Loaded ${loaded.size} profile candidate(s).${if (customFirst) " Custom profile is first." else ""}")
-            } catch (e: Exception) {
-                servers = emptyList()
-                renderServerRows()
-                b.statusTitle.text = "SERVER LIST UNAVAILABLE"
-                b.statusMessage.text = e.message ?: "Could not load a server list. Check your network or backup feed."
-                appendLog("Server discovery failed: ${e.message ?: e.javaClass.simpleName}")
-            } finally {
-                b.serverProgress.visibility = View.GONE
-                b.refreshServersButton.isEnabled = true
-                if (autoConnectAfterRefresh) {
-                    autoConnectAfterRefresh = false
-                    val connectable = servers.indices.filter { i -> !servers[i].profileUrl.isNullOrBlank() || !servers[i].inlineProfile.isNullOrBlank() }
-                    val pinned = if (stableServerEnabled && !pinnedServerIdentity.isNullOrBlank()) connectable.firstOrNull { i -> serverIdentity(servers[i]) == pinnedServerIdentity } else null
-                    val fastest = pinned ?: connectable.minByOrNull { i -> servers[i].reportedPingMs ?: Int.MAX_VALUE }
-                    if (fastest != null && !isAttemptActive && !isConnected) {
-                        appendLog(if (pinned != null) "Using pinned STABLE server: ${servers[fastest].displayName}." else "Auto-selecting the lowest reported-ping OpenVPN profile.")
-                        startConnectionAtIndex(fastest, automatic = false)
-                    } else if (!isAttemptActive && !isConnected) {
-                        b.statusTitle.text = "NO CONNECTABLE SERVER"
-                        b.statusMessage.text = "No complete .ovpn profile is available. IP addresses alone cannot connect."
-                        updateStartButton()
-                    }
-                } else if (!isAttemptActive && !isConnected) updateStartButton()
-            }
+            TunnelState.update(TunnelState.Phase.DISCONNECTING, message = "Disconnecting…")
+        } catch (e: Exception) {
+            toast("Could not stop the VPN: ${e.message ?: e.javaClass.simpleName}")
         }
     }
 
-    private fun renderServerRows() {
-        b.serverListContainer.removeAllViews()
-        if (servers.isEmpty()) {
-            val empty = TextView(this).apply {
-                text = "No server entries are available. Try Refresh or configure another HTTPS JSON feed in Advanced settings."
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.sari_muted))
-                textSize = 13f
-                setPadding(dp(8), dp(16), dp(8), dp(16))
-            }
-            b.serverListContainer.addView(empty)
+    private fun onServerPicked(server: VlessServer?) {
+        val activeNow = TunnelState.isActive()
+        if (server == null) {
+            selectedId = null
+            prefs.edit().remove(KEY_SELECTED).apply()
+            if (activeNow) toast("Auto applies the next time you connect.")
+            showTab(Tab.HOME)
+            render()
             return
         }
-
-        servers.forEachIndexed { index, server ->
-            val card = MaterialCardView(this).apply {
-                radius = dp(16).toFloat()
-                cardElevation = 0f
-                setCardBackgroundColor(ContextCompat.getColor(this@MainActivity, R.color.sari_surface))
-                strokeWidth = dp(1)
-                setStrokeColor(ContextCompat.getColor(this@MainActivity, R.color.sari_surface_alt))
-                setContentPadding(dp(13), dp(12), dp(10), dp(12))
-            }
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-            val textCol = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-            }
-            val title = TextView(this).apply {
-                text = if (server.country == "Custom") server.name else "${server.country.ifBlank { "Unknown location" }}  ·  ${server.ip}"
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.sari_text))
-                textSize = 14f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            }
-            val connectable = !server.profileUrl.isNullOrBlank() || !server.inlineProfile.isNullOrBlank()
-            val detail = TextView(this).apply {
-                text = if (!connectable) "IP address only · add a valid .ovpn profile before connecting" else if (server.reportedPingMs != null) "OpenVPN  ·  reported ping ${server.reportedPingMs} ms" else "OpenVPN  ·  latency not supplied"
-                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.sari_muted))
-                textSize = 11f
-                setPadding(0, dp(4), 0, 0)
-            }
-            textCol.addView(title)
-            textCol.addView(detail)
-            row.addView(textCol, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            val connect = MaterialButton(this).apply {
-                text = if (connectable) "CONNECT" else "CONFIG NEEDED"
-                textSize = 10f
-                minHeight = dp(38)
-                isEnabled = connectable
-                setPadding(dp(8), 0, dp(8), 0)
-                setOnClickListener {
-                    manualStop = false
-                    attemptsSinceSelection = 0
-                    if (stableServerEnabled) {
-                        pinnedServerIdentity = serverIdentity(server)
-                        connectionPrefs.edit().putString("pinned_server_identity", pinnedServerIdentity).apply()
-                        updateStableServerButton()
-                    }
-                    startConnectionAtIndex(index, automatic = false)
-                }
-            }
-            row.addView(connect, LinearLayout.LayoutParams(dp(92), dp(40)).apply { marginStart = dp(8) })
-            card.addView(row)
-            b.serverListContainer.addView(card, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { topMargin = dp(8) })
-        }
-    }
-
-    private fun startConnectionAtIndex(index: Int, automatic: Boolean) {
-        if (index !in servers.indices) {
-            finishFailed("No more candidate servers are available.")
-            return
-        }
-        if (!automatic) attemptsSinceSelection = 0
-        attemptsSinceSelection++
-        if (attemptsSinceSelection > MAX_AUTO_ATTEMPTS) {
-            finishFailed("Tried several servers without a successful connection.")
-            return
-        }
-
-        generation++
-        val token = generation
-        retryQueued = false
-        connectionWatchdog?.cancel()
-        retryJob?.cancel()
-        startedAtElapsed = 0L
-        connectedAtWallClock = 0L
-        isConnected = false
-        isVerifying = false
-        isAttemptActive = true
-        currentIndex = index
-        currentServer = servers[index]
-        val server = servers[index]
-        if (stableServerEnabled && !automatic) {
-            pinnedServerIdentity = serverIdentity(server)
-            connectionPrefs.edit().putString("pinned_server_identity", pinnedServerIdentity).apply()
-            updateStableServerButton()
-        }
-        if (server.profileUrl.isNullOrBlank() && server.inlineProfile.isNullOrBlank()) {
-            appendLog("${server.displayName} is an IP-only directory entry; a complete .ovpn profile is required.")
-            if (automatic) {
-                startConnectionAtIndex(index + 1, automatic = true)
-            } else {
-                finishFailed("This entry contains only an IP address. Add a complete .ovpn profile or use a valid VLESS/WireGuard configuration.")
-            }
-            return
-        }
-
-        vpnClient.disconnect()
-        b.startButton.text = "STOP VPN"
-        b.statusTitle.text = if (automatic) "SWITCHING SERVER" else "PREPARING VPN"
-        b.statusMessage.text = "Loading ${server.displayName}…"
-        b.serverText.text = server.displayName
-        b.protocolText.text = "OpenVPN · waiting for secure tunnel handshake"
-        b.downloadText.text = "↓ —"
-        b.uploadText.text = "↑ —"
-        b.usageText.text = "Public server statistics are not exposed by the external engine API."
-        appendLog("${if (automatic) "Auto-switching to" else "Selected"} ${server.displayName} (${index + 1}/${servers.size}).")
-
-        lifecycleScope.launch {
-            try {
-                val rawProfile = OpenVpnServerRepository.downloadProfile(server)
-                val profile = OpenVpnConfigParser.prepare(rawProfile)
-                if (token != generation || manualStop) return@launch
-                b.statusMessage.text = "Starting OpenVPN on ${profile.host}:${profile.port}/${profile.protocol}…"
-                b.protocolText.text = "OpenVPN · ${profile.protocol.uppercase(Locale.US)} · port ${profile.port}"
-                appendLog("Profile loaded: ${profile.host}:${profile.port} (${profile.protocol}).")
-                vpnClient.connect(profile.text)
-            } catch (e: Exception) {
-                if (token == generation && !manualStop) {
-                    appendLog("${server.displayName} failed before connect: ${e.message ?: e.javaClass.simpleName}")
-                    retryNext(index, token, e.message ?: "Could not download or parse profile")
-                }
-            }
-        }
-    }
-
-    private fun handleVpnStarted() {
-        if (!isAttemptActive || manualStop) return
-        startedAtElapsed = SystemClock.elapsedRealtime()
-        val token = generation
-        val index = currentIndex
-        b.statusTitle.text = "CONNECTING"
-        b.statusMessage.text = "OpenVPN started. Waiting for the server handshake…"
-        appendLog("OpenVPN engine accepted the profile; waiting for CONNECTED status.")
-        connectionWatchdog?.cancel()
-        connectionWatchdog = lifecycleScope.launch {
-            delay(CONNECT_TIMEOUT_MS)
-            if (generation == token && !isConnected && isAttemptActive && !manualStop) {
-                retryNext(index, token, "No successful handshake within ${CONNECT_TIMEOUT_MS / 1000} seconds")
-            }
-        }
-    }
-
-    private fun handleVpnStatus(state: String, message: String) {
-        val normalized = state.uppercase(Locale.US)
-        if (message.isNotBlank()) b.statusMessage.text = message.take(220)
-        appendLog("OpenVPN [$normalized]${if (message.isBlank()) "" else ": $message"}")
-        if (normalized == "CONNECTED" || normalized.startsWith("CONNECTED,") ||
-            (normalized.contains("CONNECTED") && normalized.contains("SUCCESS")) ||
-            message.contains("Initialization Sequence Completed", true)) {
-            if (isConnected || isVerifying) return
-            isVerifying = true
-            connectionWatchdog?.cancel()
-            val token = generation
-            val index = currentIndex
-            b.statusTitle.text = "VERIFYING INTERNET"
-            b.statusMessage.text = "OpenVPN connected. Checking that HTTPS traffic passes through the tunnel…"
-            lifecycleScope.launch {
-                delay(900)
-                val internetWorks = withContext(Dispatchers.IO) { verifyHttpsTraffic() }
-                if (token != generation || manualStop) return@launch
-                isVerifying = false
-                if (internetWorks) {
-                    isConnected = true
-                    isAttemptActive = true
-                    connectedAtWallClock = System.currentTimeMillis()
-                    retryQueued = false
-                    b.statusTitle.text = "CONNECTED"
-                    b.statusMessage.text = "Tunnel and HTTPS traffic verified with ${currentServer?.displayName ?: "server"}."
-                    b.startButton.text = "STOP VPN"
-                    appendLog("VPN handshake and HTTPS traffic check succeeded.")
-                } else {
-                    appendLog("Tunnel handshake appeared successful, but HTTPS traffic verification failed.")
-                    retryNext(index, token, "Tunnel connected but HTTPS traffic did not pass through it")
-                }
-            }
-            return
-        }
-        if (isConnected || isVerifying || !isAttemptActive || manualStop || startedAtElapsed == 0L) return
-        val elapsed = SystemClock.elapsedRealtime() - startedAtElapsed
-        val terminalFailure = normalized in setOf("AUTH_FAILED", "TLS_ERROR", "EXITING", "CONNECTION_TIMEOUT", "NORSERVER") ||
-            message.contains("AUTH_FAILED", true) || message.contains("TLS handshake failed", true) ||
-            message.contains("Connection timed out", true)
-        if (terminalFailure && elapsed >= EARLY_FAILOVER_MIN_MS) {
-            retryNext(currentIndex, generation, message.ifBlank { normalized })
-        }
-    }
-
-    private fun retryNext(index: Int, expectedGeneration: Int, reason: String) {
-        if (expectedGeneration != generation || retryQueued || manualStop || isConnected) return
-        if (stableServerEnabled) {
-            appendLog("STABLE mode prevents automatic IP/server switching.")
-            finishFailed("Stable server failed: $reason. Automatic switching is disabled. Turn STABLE off to allow failover.")
-            return
-        }
-        retryQueued = true
-        connectionWatchdog?.cancel()
-        appendLog("Server attempt failed: $reason")
-        if (index + 1 >= servers.size || attemptsSinceSelection >= MAX_AUTO_ATTEMPTS) {
-            finishFailed("Automatic failover stopped. Last issue: $reason")
-            return
-        }
-        b.statusTitle.text = "SWITCHING SERVER"
-        b.statusMessage.text = "This endpoint did not connect. Trying the next server…"
-        retryJob = lifecycleScope.launch {
-            delay(1_000)
-            if (expectedGeneration == generation && !manualStop && !isConnected) {
-                startConnectionAtIndex(index + 1, automatic = true)
-            }
-        }
-    }
-
-    private fun disconnectByUser() {
-        manualStop = true
-        generation++
-        connectionWatchdog?.cancel()
-        retryJob?.cancel()
-        vpnClient.disconnect()
-        isAttemptActive = false
-        isConnected = false
-        isVerifying = false
-        retryQueued = false
-        startedAtElapsed = 0L
-        connectedAtWallClock = 0L
-        b.statusTitle.text = "DISCONNECTED"
-        b.statusMessage.text = "VPN disconnected by user."
-        updateStartButton()
-        b.protocolText.text = "Engine: OpenVPN for Android"
-        appendLog("Disconnect requested by user.")
-    }
-
-    private fun finishFailed(message: String) {
-        connectionWatchdog?.cancel()
-        isAttemptActive = false
-        isConnected = false
-        isVerifying = false
-        startedAtElapsed = 0L
-        connectedAtWallClock = 0L
-        retryQueued = false
-        vpnClient.disconnect()
-        b.statusTitle.text = "CONNECTION FAILED"
-        b.statusMessage.text = message
-        updateStartButton()
-        b.elapsedText.text = "00:00:00"
-        appendLog(message)
-    }
-
-    private fun handleClientError(message: String) {
-        appendLog("OpenVPN API: $message")
-        b.statusMessage.text = message
-        if (message.contains("not installed", true)) {
+        val differentFromActive = activeNow && lastState.serverId != server.id
+        selectedId = server.id
+        prefs.edit().putString(KEY_SELECTED, server.id).apply()
+        showTab(Tab.HOME)
+        render()
+        if (differentFromActive) {
             AlertDialog.Builder(this)
-                .setTitle("OpenVPN engine required")
-                .setMessage("Sari VPN uses the OpenVPN for Android engine for real .ovpn connections. Install that app, then tap Connect again.")
+                .setTitle("Switch server?")
+                .setMessage("Reconnect through ${server.name} (${server.country}) now?")
                 .setNegativeButton("Later", null)
-                .setPositiveButton("Open app page") { _, _ ->
-                    try {
-                        startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://play.google.com/store/apps/details?id=de.blinkt.openvpn")))
-                    } catch (_: Exception) {
-                        toast("Open the Play Store and search for OpenVPN for Android.")
-                    }
+                .setPositiveButton("Switch") { _, _ ->
+                    userWantsConnection = true
+                    autoQueue.clear()
+                    requestConnect(server)
                 }
                 .show()
-            isAttemptActive = false
-            isConnected = false
-            isVerifying = false
-            updateStartButton()
-            b.statusTitle.text = "ENGINE REQUIRED"
-            return
-        }
-        if (message.contains("not granted", true) || message.contains("permission was not granted", true)) {
-            isAttemptActive = false
-            b.statusTitle.text = "PERMISSION REQUIRED"
-            updateStartButton()
-            return
-        }
-        if (startedAtElapsed > 0L && isAttemptActive && !isConnected) {
-            retryNext(currentIndex, generation, message)
         }
     }
 
-    /** The OpenVPN callback proves the handshake; this extra request checks actual tunneled traffic. */
-    private fun verifyHttpsTraffic(): Boolean {
-        var connection: HttpURLConnection? = null
-        return try {
-            connection = URL("https://www.gstatic.com/generate_204").openConnection() as HttpURLConnection
-            connection.connectTimeout = 8_000
-            connection.readTimeout = 8_000
-            connection.useCaches = false
-            connection.instanceFollowRedirects = false
-            connection.responseCode == 204
-        } catch (_: Exception) {
-            false
-        } finally {
-            connection?.disconnect()
+    private fun copyLink(server: VlessServer) {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("SariTunnel server", server.uri))
+        toast("Server link copied.")
+    }
+
+    private fun setSort(mode: SortMode) {
+        sortMode = mode
+        prefs.edit().putString(KEY_SORT, mode.name).apply()
+        render()
+    }
+
+    // ----------------------------------------------------------------- state
+
+    private fun onTunnelState(state: TunnelState.State) {
+        val previous = lastState.phase
+        lastState = state
+        if (state.phase == TunnelState.Phase.FAILED && userWantsConnection && autoQueue.isNotEmpty()) {
+            val next = autoQueue.removeFirst()
+            TunnelState.log("Trying the next fastest server: ${next.name}.")
+            requestConnect(next)
+        } else if (state.phase == TunnelState.Phase.FAILED || state.phase == TunnelState.Phase.IDLE) {
+            userWantsConnection = false
+        }
+        // The service records connection results; pick them up for the "best performing" ranking.
+        if (previous != state.phase && !testing &&
+            (state.phase == TunnelState.Phase.CONNECTED || state.phase == TunnelState.Phase.FAILED)
+        ) {
+            val snap = manager.loadSnapshot()
+            if (snap.servers.isNotEmpty()) servers = snap.servers
+        }
+        render()
+    }
+
+    private fun updateTimer() {
+        if (lastState.phase == TunnelState.Phase.CONNECTED && lastState.connectedAtMs > 0L) {
+            val s = ((System.currentTimeMillis() - lastState.connectedAtMs) / 1000).coerceAtLeast(0)
+            b.tvHint.text = String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
         }
     }
 
-    private fun appendLog(message: String) {
-        val stamp = SimpleDateFormat("HH:mm:ss", Locale.US).format(Date())
-        val all = (b.diagText.text.toString() + "\n[$stamp] $message").lines().takeLast(65).joinToString("\n")
-        b.diagText.text = all.trim()
+    // -------------------------------------------------------------- rendering
+
+    private fun showTab(target: Tab) {
+        tab = target
+        b.panelHome.visibility = if (target == Tab.HOME) View.VISIBLE else View.GONE
+        b.panelLocation.visibility = if (target == Tab.LOCATION) View.VISIBLE else View.GONE
+        b.panelSettings.visibility = if (target == Tab.SETTINGS) View.VISIBLE else View.GONE
+        b.navHome.isSelected = target == Tab.HOME
+        b.navLocation.isSelected = target == Tab.LOCATION
+        b.navSettings.isSelected = target == Tab.SETTINGS
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density + 0.5f).toInt()
+    private fun byId(id: String?): VlessServer? = if (id == null) null else servers.firstOrNull { it.id == id }
+
+    /** The fastest server that actually answered a latency test, or null if none has. */
+    private fun fastestTested(): VlessServer? =
+        servers.filter { it.reachable == true }.minByOrNull { it.pingMs }
+
+    private fun render() {
+        if (!::b.isInitialized) return
+        renderHome()
+        renderList()
+        renderSettings()
+    }
+
+    private fun renderHome() {
+        val phase = lastState.phase
+        val active = byId(lastState.serverId)
+        val chosen = byId(selectedId)
+        val auto = fastestTested()
+        val target = chosen ?: auto
+
+        val waitingForTest = userWantsConnection && phase == TunnelState.Phase.IDLE && testing
+        val busy = phase == TunnelState.Phase.CONNECTING || phase == TunnelState.Phase.VERIFYING ||
+            phase == TunnelState.Phase.DISCONNECTING || waitingForTest
+
+        when {
+            phase == TunnelState.Phase.CONNECTED -> setStatus("You are protected", R.color.sari_green, R.drawable.ic_shield_on)
+            phase == TunnelState.Phase.VERIFYING -> setStatus("Checking connection…", R.color.sari_amber, R.drawable.ic_shield_wait)
+            phase == TunnelState.Phase.CONNECTING || waitingForTest -> setStatus("Connecting…", R.color.sari_amber, R.drawable.ic_shield_wait)
+            phase == TunnelState.Phase.DISCONNECTING -> setStatus("Disconnecting…", R.color.sari_amber, R.drawable.ic_shield_wait)
+            else -> setStatus("You are unprotected!", R.color.sari_danger, R.drawable.ic_shield_off)
+        }
+
+        b.connectButton.mode = when {
+            phase == TunnelState.Phase.CONNECTED -> ConnectButtonView.Mode.CONNECTED
+            busy -> ConnectButtonView.Mode.BUSY
+            else -> ConnectButtonView.Mode.IDLE
+        }
+
+        val shown = if (phase == TunnelState.Phase.CONNECTED || phase == TunnelState.Phase.CONNECTING ||
+            phase == TunnelState.Phase.VERIFYING) active ?: target else target
+        b.tvLocationLabel.text = if (phase == TunnelState.Phase.CONNECTED) "Current Location:" else "Selected Location:"
+        b.tvLocation.text = when {
+            shown != null -> shown.country
+            servers.isEmpty() -> if (refreshing) "Loading…" else "No servers"
+            testing -> "Testing…"
+            else -> "Auto"
+        }
+
+        if (phase != TunnelState.Phase.CONNECTED) {
+            b.tvHint.text = when {
+                phase == TunnelState.Phase.CONNECTING || phase == TunnelState.Phase.VERIFYING -> "Tap to cancel"
+                phase == TunnelState.Phase.DISCONNECTING -> "Disconnecting…"
+                waitingForTest -> "Finding fastest server…"
+                phase == TunnelState.Phase.FAILED -> "Tap to retry"
+                else -> "Tap to connect"
+            }
+        } else updateTimer()
+
+        // Bottom card: "Fastest" is only claimed for a server that was really tested.
+        when {
+            chosen != null -> {
+                b.tvCardLabel.text = if (chosen.reachable == true) "Selected Location · ${chosen.pingMs} ms" else "Selected Location"
+                b.tvCardName.text = chosen.name
+                b.tvCardFlag.text = CountryUtils.flag(chosen.countryCode)
+            }
+            auto != null -> {
+                b.tvCardLabel.text = "Fastest Location · ${auto.pingMs} ms"
+                b.tvCardName.text = auto.name
+                b.tvCardFlag.text = CountryUtils.flag(auto.countryCode)
+            }
+            else -> {
+                b.tvCardLabel.text = if (testing) "Finding fastest location…" else "Fastest Location"
+                b.tvCardName.text = when {
+                    servers.isEmpty() -> "No servers loaded"
+                    testing -> "Testing $testDone/$testTotal"
+                    else -> "Not tested yet"
+                }
+                b.tvCardFlag.text = "\uD83C\uDF10"
+            }
+        }
+
+        b.tvInfo.text = when {
+            phase == TunnelState.Phase.FAILED -> lastState.message
+            phase == TunnelState.Phase.CONNECTED -> "Traffic through the tunnel was verified."
+            testing -> "Testing servers $testDone/$testTotal…"
+            refreshing -> "Updating the server list…"
+            servers.isEmpty() -> lastError?.let { "Could not load servers: $it" } ?: "No servers cached yet."
+            else -> updatedText()
+        }
+
+        val working = refreshing || testing
+        b.btnRefresh.alpha = if (working) 0.45f else 1f
+        b.btnRefresh.isEnabled = !working
+    }
+
+    private fun renderList() {
+        val items = ServerSorter.build(servers, sortMode, collapsed)
+        val autoText = fastestTested()?.let { "Currently ${it.name} · ${it.pingMs} ms" }
+            ?: "Picks the lowest ping after a test"
+        adapter.submit(items, selectedId, lastState.serverId, lastState.phase, autoText)
+
+        b.chipFastest.isSelected = sortMode == SortMode.FASTEST
+        b.chipBest.isSelected = sortMode == SortMode.BEST
+        b.chipCountry.isSelected = sortMode == SortMode.COUNTRY
+
+        val working = refreshing || testing
+        b.listProgress.visibility = if (working) View.VISIBLE else View.INVISIBLE
+        b.btnTestAll.isEnabled = !testing
+        b.tvEmpty.visibility = if (servers.isEmpty()) View.VISIBLE else View.GONE
+        b.serverList.visibility = if (servers.isEmpty()) View.GONE else View.VISIBLE
+        b.tvEmpty.text = when {
+            refreshing -> "Loading servers…"
+            lastError != null -> "No servers cached yet.\n${lastError}\nTap the refresh button on Home to retry."
+            else -> "No servers cached yet."
+        }
+        b.tvListInfo.text = when {
+            testing -> "Testing ping $testDone/$testTotal… (TCP connect time)"
+            else -> "${updatedText()} · ping = TCP connect time; it is not a speed test."
+        }
+    }
+
+    private fun renderSettings() {
+        val sb = StringBuilder()
+        sb.append(VlessSubscriptionManager.SOURCE_URL).append('\n')
+        sb.append(updatedText()).append('\n')
+        sb.append("Auto-refresh every 24 hours; cached servers are kept if the network fails.")
+        lastError?.let { sb.append("\nLast refresh problem: ").append(it) }
+        b.tvSourceInfo.text = sb.toString()
+        b.btnRefreshNow.isEnabled = !refreshing
+        b.btnRetest.isEnabled = !testing
+        b.tvAbout.text = "SariTunnel Africa ${BuildConfigInfo.versionName(this)} · Android allows one active VPN at a time. " +
+            "Public servers may be slow or unavailable. \"Connected\" is shown only after traffic passes through the tunnel."
+    }
+
+    private fun updatedText(): String {
+        if (servers.isEmpty()) return "No cached servers"
+        val ago = if (fetchedAt > 0L) DateUtils.getRelativeTimeSpanString(
+            fetchedAt, System.currentTimeMillis(), DateUtils.MINUTE_IN_MILLIS
+        ).toString() else "never"
+        return "${servers.size} servers · updated $ago"
+    }
+
+    private fun setStatus(text: String, colorRes: Int, iconRes: Int) {
+        b.tvStatus.text = text
+        b.tvStatus.setTextColor(ContextCompat.getColor(this, colorRes))
+        b.ivShield.setImageResource(iconRes)
+    }
 
     private fun toast(message: String) = Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
 
     override fun onDestroy() {
-        connectionWatchdog?.cancel()
-        retryJob?.cancel()
-        if (::vpnClient.isInitialized) vpnClient.close()
+        testJob?.cancel()
         super.onDestroy()
     }
 
     companion object {
-        private const val CONNECT_TIMEOUT_MS = 30_000L
-        private const val EARLY_FAILOVER_MIN_MS = 4_000L
-        private const val MAX_AUTO_ATTEMPTS = 8
+        private const val KEY_SELECTED = "selected_server_id"
+        private const val KEY_SORT = "sort_mode"
+        private const val RETEST_AFTER_MS = 30L * 60 * 1000
+        private const val MAX_AUTO_FALLBACKS = 2
+    }
+}
+
+/** Reads the version without depending on a generated BuildConfig class. */
+private object BuildConfigInfo {
+    fun versionName(context: Context): String = try {
+        context.packageManager.getPackageInfo(context.packageName, 0).versionName ?: ""
+    } catch (_: Exception) {
+        ""
     }
 }

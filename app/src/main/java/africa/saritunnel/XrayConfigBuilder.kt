@@ -7,7 +7,12 @@ import java.util.Locale
 
 /** Builds a restrictive Xray TUN config from a complete VLESS share URI. */
 object XrayConfigBuilder {
-    fun fromVlessUri(input: String): String {
+    /**
+     * [resolvedAddress] lets the caller connect to a pre-resolved IP while TLS/REALITY server names and
+     * HTTP Host headers still use the original host name. Go's resolver cannot read Android's DNS
+     * settings inside the sandbox, so resolving before the tunnel starts is the reliable path.
+     */
+    fun fromVlessUri(input: String, resolvedAddress: String? = null): String {
         val raw = input.trim()
         require(raw.startsWith("vless://", ignoreCase = true)) { "Only vless:// profiles are accepted here." }
         val uri = Uri.parse(raw)
@@ -18,7 +23,8 @@ object XrayConfigBuilder {
         require(host.isNotBlank() && port in 1..65535) { "The VLESS link needs a host and port." }
         require(!raw.contains("...") && !raw.contains('…')) { "This VLESS link looks truncated. Publish the complete link." }
 
-        val network = (uri.getQueryParameter("type") ?: "tcp").lowercase(Locale.ROOT)
+        // "raw" is the newer Xray name for plain TCP and is used by the Blogger feed.
+        val network = (uri.getQueryParameter("type") ?: "tcp").lowercase(Locale.ROOT).let { if (it == "raw") "tcp" else it }
         val security = (uri.getQueryParameter("security") ?: "none").lowercase(Locale.ROOT)
         val sni = uri.getQueryParameter("sni")?.takeIf { it.isNotBlank() }
             ?: uri.getQueryParameter("serverName")?.takeIf { it.isNotBlank() } ?: host
@@ -39,14 +45,16 @@ object XrayConfigBuilder {
             .put("tag", "proxy")
             .put("protocol", "vless")
             .put("settings", JSONObject().put("vnext", JSONArray().put(
-                JSONObject().put("address", host).put("port", port).put("users", JSONArray().put(user))
+                JSONObject().put("address", resolvedAddress?.takeIf { it.isNotBlank() } ?: host).put("port", port).put("users", JSONArray().put(user))
             )))
 
+        val hostParam = uri.getQueryParameter("host")?.takeIf { it.isNotBlank() }
+            ?: if (!resolvedAddress.isNullOrBlank()) host else null
         val stream = JSONObject().put("network", network).put("security", security)
         when (network) {
             "ws" -> {
                 val headers = JSONObject()
-                uri.getQueryParameter("host")?.takeIf { it.isNotBlank() }?.let { headers.put("Host", it) }
+                hostParam?.let { headers.put("Host", it) }
                 val ws = JSONObject().put("path", uri.getQueryParameter("path")?.ifBlank { "/" } ?: "/")
                 if (headers.length() > 0) ws.put("headers", headers)
                 stream.put("wsSettings", ws)
@@ -57,12 +65,12 @@ object XrayConfigBuilder {
                 .put("multiMode", uri.getQueryParameter("mode").equals("multi", true)))
             "httpupgrade" -> {
                 val settings = JSONObject().put("path", uri.getQueryParameter("path")?.ifBlank { "/" } ?: "/")
-                uri.getQueryParameter("host")?.takeIf { it.isNotBlank() }?.let { settings.put("host", it) }
+                hostParam?.let { settings.put("host", it) }
                 stream.put("httpupgradeSettings", settings)
             }
             "xhttp" -> {
                 val settings = JSONObject().put("path", uri.getQueryParameter("path")?.ifBlank { "/" } ?: "/")
-                uri.getQueryParameter("host")?.takeIf { it.isNotBlank() }?.let { settings.put("host", it) }
+                hostParam?.let { settings.put("host", it) }
                 uri.getQueryParameter("mode")?.takeIf { it.isNotBlank() }?.let { settings.put("mode", it) }
                 stream.put("xhttpSettings", settings)
             }
