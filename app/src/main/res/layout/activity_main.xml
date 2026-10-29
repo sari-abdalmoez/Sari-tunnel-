@@ -484,27 +484,18 @@
                         <TextView
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:text="More"
+                            android:text="Other"
                             android:textColor="@color/sari_text"
                             android:textSize="16sp"
                             android:textStyle="bold" />
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnOpenVpn"
+                            android:id="@+id/btnTor"
                             style="@style/Widget.Material3.Button.TonalButton"
                             android:layout_width="match_parent"
                             android:layout_height="50dp"
                             android:layout_marginTop="10dp"
-                            android:text="OpenVPN &amp; Tor engines"
-                            app:cornerRadius="14dp" />
-
-                        <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnAdvanced"
-                            style="@style/Widget.Material3.Button.TonalButton"
-                            android:layout_width="match_parent"
-                            android:layout_height="50dp"
-                            android:layout_marginTop="8dp"
-                            android:text="Advanced settings"
+                            android:text="Open Tor VPN app (external)"
                             app:cornerRadius="14dp" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>

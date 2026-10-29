@@ -151,6 +151,7 @@ class ServerAdapter(
 
             val (label, color) = when {
                 isActive && phase == TunnelState.Phase.CONNECTED -> "Connected" to R.color.sari_blue
+                isActive && phase == TunnelState.Phase.UNVERIFIED -> "Tunnel up, unverified" to R.color.sari_amber
                 isActive && (phase == TunnelState.Phase.CONNECTING || phase == TunnelState.Phase.VERIFYING) ->
                     "Connecting…" to R.color.sari_amber
                 s.lastConnectOk == false -> "Last attempt failed" to R.color.sari_danger

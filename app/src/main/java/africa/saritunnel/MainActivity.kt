@@ -28,7 +28,7 @@ import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Home / Location / Settings screens for the VLESS (Xray) tunnel.
- * OpenVPN and Tor controls live on [OpenVpnActivity] and are reachable from Settings.
+ * Tor is an external hand-off to the separately installed Tor VPN app (see openTorApp).
  */
 class MainActivity : AppCompatActivity() {
     private enum class Tab { HOME, LOCATION, SETTINGS }
@@ -110,8 +110,7 @@ class MainActivity : AppCompatActivity() {
         b.chipFastest.setOnClickListener { setSort(SortMode.FASTEST) }
         b.chipBest.setOnClickListener { setSort(SortMode.BEST) }
         b.chipCountry.setOnClickListener { setSort(SortMode.COUNTRY) }
-        b.btnOpenVpn.setOnClickListener { startActivity(Intent(this, OpenVpnActivity::class.java)) }
-        b.btnAdvanced.setOnClickListener { startActivity(Intent(this, AdvancedActivity::class.java)) }
+        b.btnTor.setOnClickListener { openTorApp() }
         b.btnLogToggle.setOnClickListener {
             logVisible = !logVisible
             b.tvLog.visibility = if (logVisible) View.VISIBLE else View.GONE
@@ -255,7 +254,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun onPowerTapped() {
         when (lastState.phase) {
-            TunnelState.Phase.CONNECTING, TunnelState.Phase.VERIFYING, TunnelState.Phase.CONNECTED -> disconnect()
+            TunnelState.Phase.CONNECTING, TunnelState.Phase.VERIFYING, TunnelState.Phase.CONNECTED,
+            TunnelState.Phase.UNVERIFIED -> disconnect()
             TunnelState.Phase.DISCONNECTING -> Unit
             else -> if (userWantsConnection) {
                 // Tapped while waiting for the latency test: cancel the pending connect.
@@ -368,9 +368,26 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Tor is NOT embedded. This only opens the separately installed official Tor VPN app. It cannot run
+     * alongside the VLESS tunnel, because Android allows one active VPN at a time.
+     */
+    private fun openTorApp() {
+        if (TunnelState.isActive()) {
+            toast("Disconnect Sari VPN first. Android allows only one VPN at a time.")
+            return
+        }
+        val intent = packageManager.getLaunchIntentForPackage(TOR_PACKAGE)
+        if (intent == null) {
+            toast("Tor VPN app is not installed. Install it from its official source, then try again.")
+        } else {
+            startActivity(intent)
+        }
+    }
+
     private fun copyLink(server: VlessServer) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        clipboard.setPrimaryClip(ClipData.newPlainText("SariTunnel server", server.uri))
+        clipboard.setPrimaryClip(ClipData.newPlainText("Sari VPN server", server.uri))
         toast("Server link copied.")
     }
 
@@ -394,7 +411,8 @@ class MainActivity : AppCompatActivity() {
         }
         // The service records connection results; pick them up for the "best performing" ranking.
         if (previous != state.phase && !testing &&
-            (state.phase == TunnelState.Phase.CONNECTED || state.phase == TunnelState.Phase.FAILED)
+            (state.phase == TunnelState.Phase.CONNECTED || state.phase == TunnelState.Phase.UNVERIFIED ||
+                state.phase == TunnelState.Phase.FAILED)
         ) {
             val snap = manager.loadSnapshot()
             if (snap.servers.isNotEmpty()) servers = snap.servers
@@ -403,7 +421,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateTimer() {
-        if (lastState.phase == TunnelState.Phase.CONNECTED && lastState.connectedAtMs > 0L) {
+        val live = lastState.phase == TunnelState.Phase.CONNECTED || lastState.phase == TunnelState.Phase.UNVERIFIED
+        if (live && lastState.connectedAtMs > 0L) {
             val s = ((System.currentTimeMillis() - lastState.connectedAtMs) / 1000).coerceAtLeast(0)
             b.tvHint.text = String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
         }
@@ -448,19 +467,20 @@ class MainActivity : AppCompatActivity() {
         when {
             phase == TunnelState.Phase.CONNECTED -> setStatus("You are protected", R.color.sari_green, R.drawable.ic_shield_on)
             phase == TunnelState.Phase.VERIFYING -> setStatus("Checking connection…", R.color.sari_amber, R.drawable.ic_shield_wait)
+            phase == TunnelState.Phase.UNVERIFIED -> setStatus("Tunnel up · internet not verified", R.color.sari_amber, R.drawable.ic_shield_wait)
             phase == TunnelState.Phase.CONNECTING || waitingForTest -> setStatus("Connecting…", R.color.sari_amber, R.drawable.ic_shield_wait)
             phase == TunnelState.Phase.DISCONNECTING -> setStatus("Disconnecting…", R.color.sari_amber, R.drawable.ic_shield_wait)
             else -> setStatus("You are unprotected!", R.color.sari_danger, R.drawable.ic_shield_off)
         }
 
         b.connectButton.mode = when {
-            phase == TunnelState.Phase.CONNECTED -> ConnectButtonView.Mode.CONNECTED
+            phase == TunnelState.Phase.CONNECTED || phase == TunnelState.Phase.UNVERIFIED -> ConnectButtonView.Mode.CONNECTED
             busy -> ConnectButtonView.Mode.BUSY
             else -> ConnectButtonView.Mode.IDLE
         }
 
-        val shown = if (phase == TunnelState.Phase.CONNECTED || phase == TunnelState.Phase.CONNECTING ||
-            phase == TunnelState.Phase.VERIFYING) active ?: target else target
+        val shown = if (phase == TunnelState.Phase.CONNECTED || phase == TunnelState.Phase.UNVERIFIED ||
+            phase == TunnelState.Phase.CONNECTING || phase == TunnelState.Phase.VERIFYING) active ?: target else target
         b.tvLocationLabel.text = if (phase == TunnelState.Phase.CONNECTED) "Current Location:" else "Selected Location:"
         b.tvLocation.text = when {
             shown != null -> shown.country
@@ -477,7 +497,9 @@ class MainActivity : AppCompatActivity() {
                 phase == TunnelState.Phase.FAILED -> "Tap to retry"
                 else -> "Tap to connect"
             }
-        } else updateTimer()
+        } else if (phase == TunnelState.Phase.UNVERIFIED) {
+            updateTimer()
+        }
 
         // Bottom card: "Fastest" is only claimed for a server that was really tested.
         when {
@@ -505,6 +527,7 @@ class MainActivity : AppCompatActivity() {
         b.tvInfo.text = when {
             phase == TunnelState.Phase.FAILED -> lastState.message
             phase == TunnelState.Phase.CONNECTED -> "Traffic through the tunnel was verified."
+            phase == TunnelState.Phase.UNVERIFIED -> lastState.message
             testing -> "Testing servers $testDone/$testTotal…"
             refreshing -> "Updating the server list…"
             servers.isEmpty() -> lastError?.let { "Could not load servers: $it" } ?: "No servers cached yet."
@@ -544,14 +567,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun renderSettings() {
         val sb = StringBuilder()
-        sb.append(VlessSubscriptionManager.SOURCE_URL).append('\n')
+        sb.append("Source: Sari VPN server feed\n")
         sb.append(updatedText()).append('\n')
         sb.append("Auto-refresh every 24 hours; cached servers are kept if the network fails.")
         lastError?.let { sb.append("\nLast refresh problem: ").append(it) }
         b.tvSourceInfo.text = sb.toString()
         b.btnRefreshNow.isEnabled = !refreshing
         b.btnRetest.isEnabled = !testing
-        b.tvAbout.text = "SariTunnel Africa ${BuildConfigInfo.versionName(this)} · Android allows one active VPN at a time. " +
+        b.tvAbout.text = "Sari VPN ${BuildConfigInfo.versionName(this)} · Android allows one active VPN at a time. " +
             "Public servers may be slow or unavailable. \"Connected\" is shown only after traffic passes through the tunnel."
     }
 
@@ -581,6 +604,7 @@ class MainActivity : AppCompatActivity() {
         private const val KEY_SORT = "sort_mode"
         private const val RETEST_AFTER_MS = 30L * 60 * 1000
         private const val MAX_AUTO_FALLBACKS = 2
+        private const val TOR_PACKAGE = "org.torproject.vpn"
     }
 }
 

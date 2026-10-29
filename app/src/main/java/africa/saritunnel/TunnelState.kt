@@ -9,7 +9,7 @@ import java.util.Locale
 
 /** Process-wide tunnel state shared by [XrayVpnService] and the UI (both run in the same process). */
 object TunnelState {
-    enum class Phase { IDLE, CONNECTING, VERIFYING, CONNECTED, DISCONNECTING, FAILED }
+    enum class Phase { IDLE, CONNECTING, VERIFYING, CONNECTED, UNVERIFIED, DISCONNECTING, FAILED }
 
     data class State(
         val phase: Phase = Phase.IDLE,
@@ -34,7 +34,7 @@ object TunnelState {
     }
 
     fun isActive(): Boolean = _state.value.phase.let {
-        it == Phase.CONNECTING || it == Phase.VERIFYING || it == Phase.CONNECTED
+        it == Phase.CONNECTING || it == Phase.VERIFYING || it == Phase.CONNECTED || it == Phase.UNVERIFIED
     }
 
     fun log(message: String) {

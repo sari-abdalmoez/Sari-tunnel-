@@ -100,7 +100,7 @@ class XrayVpnService : VpnService() {
                     if (myGeneration != generation.get()) return@withLock
 
                     tun = Builder()
-                        .setSession("SariTunnel · VLESS")
+                        .setSession("Sari VPN · VLESS")
                         .setMtu(1280)
                         .addAddress("10.111.0.1", 32)
                         .addRoute("0.0.0.0", 0)
@@ -120,25 +120,28 @@ class XrayVpnService : VpnService() {
                     TunnelState.log("Xray core started; verifying HTTPS traffic through the tunnel.")
                     updateNotification("Verifying connection…")
 
-                    val working = verifyTraffic(myGeneration)
+                    val verified = verifyTraffic(myGeneration)
                     if (myGeneration != generation.get()) return@withLock
-                    if (working) {
-                        VlessSubscriptionManager(applicationContext).recordConnection(serverId, true)
-                        setStatus("Connected · traffic verified")
+                    VlessSubscriptionManager(applicationContext).recordConnection(serverId, verified)
+                    if (verified) {
+                        setStatus("Connected · internet verified")
                         TunnelState.update(
                             TunnelState.Phase.CONNECTED, serverId, "Connected to $serverName",
                             connectedAtMs = System.currentTimeMillis()
                         )
-                        TunnelState.log("Traffic verified. Connected to $serverName.")
+                        TunnelState.log("Internet verified through $serverName.")
                         updateNotification("Connected to $serverName")
                     } else {
-                        VlessSubscriptionManager(applicationContext).recordConnection(serverId, false)
-                        val failure = "The server accepted the tunnel but no internet traffic passed."
-                        shutdownCore("Failed: $failure")
-                        TunnelState.update(TunnelState.Phase.FAILED, serverId, failure)
-                        TunnelState.log("$serverName failed: $failure")
-                        stopForeground(STOP_FOREGROUND_REMOVE)
-                        stopSelf(startId)
+                        // The core is running. A failed probe may be a probe-URL or DNS issue, so keep the tunnel
+                        // up and say so instead of reporting a fake "connected" or silently dropping it.
+                        setStatus("Tunnel started · internet not verified")
+                        TunnelState.update(
+                            TunnelState.Phase.UNVERIFIED, serverId,
+                            "Tunnel started, but internet access could not be verified.",
+                            connectedAtMs = System.currentTimeMillis()
+                        )
+                        TunnelState.log("Tunnel started via $serverName, but HTTPS probes failed. The tunnel is still up.")
+                        updateNotification("Tunnel up · internet not verified")
                     }
                 } catch (e: Exception) {
                     if (myGeneration != generation.get()) {
@@ -146,6 +149,7 @@ class XrayVpnService : VpnService() {
                         return@withLock
                     }
                     val failure = e.message ?: e.javaClass.simpleName
+                    TunnelState.log("Startup error (${e.javaClass.simpleName}).")
                     VlessSubscriptionManager(applicationContext).recordConnection(serverId, false)
                     shutdownCore("Failed: $failure")
                     TunnelState.update(TunnelState.Phase.FAILED, serverId, failure)
@@ -209,7 +213,7 @@ class XrayVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_vpn)
-            .setContentTitle("SariTunnel · VLESS")
+            .setContentTitle("Sari VPN · VLESS")
             .setContentText(message)
             .setContentIntent(open)
             .setOngoing(true)
@@ -225,7 +229,7 @@ class XrayVpnService : VpnService() {
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             getSystemService(NotificationManager::class.java).createNotificationChannel(
-                NotificationChannel(CHANNEL, "SariTunnel VPN", NotificationManager.IMPORTANCE_LOW)
+                NotificationChannel(CHANNEL, "Sari VPN", NotificationManager.IMPORTANCE_LOW)
             )
         }
     }

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Light SariTunnel palette. Names are unchanged so the OpenVPN/Tor screens follow the same theme. -->
+    <!-- Sari VPN light palette. -->
     <color name="sari_background">#FFFFFF</color>
     <color name="sari_surface">#F6F8FB</color>
     <color name="sari_surface_alt">#E9EEF4</color>

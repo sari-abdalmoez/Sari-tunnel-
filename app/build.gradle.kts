@@ -33,7 +33,6 @@ android {
 
     buildFeatures {
         viewBinding = true
-        aidl = true
     }
 }
 
@@ -47,8 +46,6 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.6")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
-    implementation("androidx.security:security-crypto:1.1.0")
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jsoup:jsoup:1.18.3")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
 }
