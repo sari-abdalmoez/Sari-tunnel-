@@ -20,6 +20,7 @@ cd "$ROOT/xray-go"
 echo "Resolving pinned Xray-core dependencies..."
 go mod tidy
 MOBILE_VERSION="v0.0.0-20260709172247-6129f5bee9d5"
+go get -tool "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
 echo "Installing gomobile/gobind $MOBILE_VERSION..."
 go install "golang.org/x/mobile/cmd/gomobile@$MOBILE_VERSION"
 go install "golang.org/x/mobile/cmd/gobind@$MOBILE_VERSION"
