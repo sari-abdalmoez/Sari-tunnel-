@@ -40,7 +40,7 @@ dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // Built by scripts/build-xray-aar.sh from xray-go during preBuild / GitHub Actions.
     // AAR must be resolved as an Android library (flatDir repo in settings.gradle.kts).
-    implementation(name = "xray", ext = "aar")
+    implementation(files("libs/xray.aar"))
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
