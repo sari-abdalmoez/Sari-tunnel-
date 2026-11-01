@@ -1,11 +1,11 @@
-# SariTunnel Africa — Multi-engine Android source
+# Sari VPN — Multi-engine Android source
 
 مشروع Android متعدد البروتوكولات يضم ثلاثة مسارات منفصلة. هذه الحزمة **مصدر المشروع**؛ يُبنى APK عبر GitHub Actions ولم يُختبر على جهاز في هذه الجلسة.
 
 ## المحركات
 
 - **VLESS / Xray داخل التطبيق:** يقرأ روابط `vless://` المنشورة في [صفحة Blogger](https://connection7876.blogspot.com/?m=1)، ويبني إعداد Xray ويبدأ نفق Android `VpnService`. مشروع Go bridge في `xray-go/` يُحوّل إلى `app/libs/xray.aar` آلياً عبر `scripts/build-xray-aar.sh`.
-- **Tor VPN:** يفتح التطبيق الرسمي المستقل Tor VPN for Android (الحزمة `org.torproject.vpn`). بسبب قيود Android، لا يتحكم SariTunnelAfrica مباشرة في تشغيل/إيقاف VPN خارجي؛ يفتح التطبيق الرسمي أو إعدادات VPN لإدارة الاتصال.
+- **Tor VPN:** يفتح التطبيق الرسمي المستقل Tor VPN for Android (الحزمة `org.torproject.vpn`). بسبب قيود Android، لا يتحكم Sari VPN مباشرة في تشغيل/إيقاف VPN خارجي؛ يفتح التطبيق الرسمي أو إعدادات VPN لإدارة الاتصال.
 - **OpenVPN:** يستكشف التطبيق ملفات `.ovpn` من IPSpeed ثم يرجع إلى `servers.json` عند فشل المصدر أو إرجاعه 404/صفحة حماية. يرسل الملف إلى **OpenVPN for Android** عبر واجهة AIDL الرسمية؛ يلزم تثبيت التطبيق المرافق والموافقة على الوصول أول مرة. محرك OpenVPN نفسه ليس مضمناً داخل APK.
 
 ## مهم عن عناوين الخوادم

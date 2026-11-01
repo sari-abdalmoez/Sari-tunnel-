@@ -6,6 +6,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
+import android.graphics.RadialGradient
 import android.graphics.RectF
 import android.graphics.Shader
 import android.util.AttributeSet
@@ -13,7 +14,10 @@ import android.view.View
 import android.view.animation.LinearInterpolator
 import kotlin.math.min
 
-/** Round connect button: split dark/light disc with rings, an amber spinner while busy, blue when connected. */
+/**
+ * Power button: a thick ring around a round face with a power glyph.
+ * Idle = slate, Connected = teal glow, Busy = amber sweep. Deliberately not a split half-disc.
+ */
 class ConnectButtonView @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null
@@ -30,13 +34,10 @@ class ConnectButtonView @JvmOverloads constructor(
         }
 
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val arc = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeCap = Paint.Cap.ROUND
-        color = Color.parseColor("#F5A524")
-    }
-    private val arcBounds = RectF()
-    private var sweepStart = 0f
+    private val ring = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val glyph = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val rect = RectF()
+    private var sweepStart = -90f
     private var animator: ValueAnimator? = null
 
     init {
@@ -56,45 +57,54 @@ class ConnectButtonView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         val cx = width / 2f
         val cy = height / 2f
-        val r = min(width, height) / 2f - dp(12f)
-        if (r <= 0f) return
+        val outer = min(width, height) / 2f - dp(14f)
+        if (outer <= 0f) return
+        val stroke = dp(10f)
+        val faceR = outer - stroke / 2f - dp(6f)
 
-        val top: Int
-        val bottom: Int
-        val rings: IntArray
-        when (mode) {
-            Mode.CONNECTED -> {
-                top = Color.parseColor("#2B9AF0"); bottom = Color.parseColor("#0B3D75")
-                rings = intArrayOf(Color.parseColor("#D6ECFF"), Color.parseColor("#B1D9FA"), Color.parseColor("#86C2F3"), Color.parseColor("#2E86D8"))
-            }
-            else -> {
-                top = Color.parseColor("#8C8C8E"); bottom = Color.parseColor("#2E2F33")
-                rings = intArrayOf(Color.parseColor("#D4D2D2"), Color.parseColor("#C0BEBE"), Color.parseColor("#A9A8A8"), Color.parseColor("#6E6E70"))
-            }
+        val connected = mode == Mode.CONNECTED
+        val ringColor = when (mode) {
+            Mode.CONNECTED -> Color.parseColor("#14B8A6")
+            Mode.BUSY -> Color.parseColor("#D0D5DD")
+            Mode.IDLE -> Color.parseColor("#D0D5DD")
+        }
+        val glyphColor = if (connected) Color.parseColor("#0E9F8E") else Color.parseColor("#344054")
+
+        // Soft glow when connected
+        if (connected) {
+            fill.shader = RadialGradient(cx, cy, outer + dp(18f),
+                Color.argb(70, 20, 184, 166), Color.TRANSPARENT, Shader.TileMode.CLAMP)
+            canvas.drawCircle(cx, cy, outer + dp(18f), fill)
+            fill.shader = null
         }
 
+        // Ring
+        ring.strokeWidth = stroke
+        ring.color = ringColor
+        canvas.drawCircle(cx, cy, outer - stroke / 2f, ring)
+
+        // Face
+        fill.shader = if (connected)
+            LinearGradient(cx, cy - faceR, cx, cy + faceR, Color.parseColor("#F0FDFA"), Color.parseColor("#CCFBF1"), Shader.TileMode.CLAMP)
+        else
+            LinearGradient(cx, cy - faceR, cx, cy + faceR, Color.parseColor("#FFFFFF"), Color.parseColor("#E4E7EC"), Shader.TileMode.CLAMP)
+        canvas.drawCircle(cx, cy, faceR, fill)
         fill.shader = null
-        fill.color = Color.argb(28, 0, 0, 0)
-        canvas.drawCircle(cx, cy + dp(5f), r, fill)
 
-        fill.shader = LinearGradient(cx, cy - r, cx, cy + r, top, bottom, Shader.TileMode.CLAMP)
-        canvas.drawCircle(cx, cy, r, fill)
-        fill.shader = null
+        // Power glyph: arc with a gap at the top, plus a short vertical bar
+        glyph.strokeWidth = dp(7f)
+        glyph.color = glyphColor
+        val gr = faceR * 0.42f
+        rect.set(cx - gr, cy - gr, cx + gr, cy + gr)
+        canvas.drawArc(rect, -50f, 280f, false, glyph)
+        canvas.drawLine(cx, cy - gr * 1.15f, cx, cy - gr * 0.05f, glyph)
 
-        canvas.save()
-        canvas.clipRect(0f, 0f, cx, height.toFloat())
-        val factors = floatArrayOf(0.90f, 0.68f, 0.46f, 0.22f)
-        for (i in factors.indices) {
-            fill.color = rings[i]
-            canvas.drawCircle(cx, cy, r * factors[i], fill)
-        }
-        canvas.restore()
-
+        // Busy: amber sweep around the outside
         if (mode == Mode.BUSY) {
-            arc.strokeWidth = dp(5f)
-            val pad = dp(6f)
-            arcBounds.set(cx - r - pad, cy - r - pad, cx + r + pad, cy + r + pad)
-            canvas.drawArc(arcBounds, sweepStart, 110f, false, arc)
+            ring.strokeWidth = stroke
+            ring.color = Color.parseColor("#F5A524")
+            rect.set(cx - outer + stroke / 2f, cy - outer + stroke / 2f, cx + outer - stroke / 2f, cy + outer - stroke / 2f)
+            canvas.drawArc(rect, sweepStart, 110f, false, ring)
         }
     }
 
@@ -102,7 +112,7 @@ class ConnectButtonView @JvmOverloads constructor(
         animator?.cancel()
         animator = null
         if (mode == Mode.BUSY && isAttachedToWindow) {
-            animator = ValueAnimator.ofFloat(0f, 360f).apply {
+            animator = ValueAnimator.ofFloat(-90f, 270f).apply {
                 duration = 1100
                 repeatCount = ValueAnimator.INFINITE
                 interpolator = LinearInterpolator()

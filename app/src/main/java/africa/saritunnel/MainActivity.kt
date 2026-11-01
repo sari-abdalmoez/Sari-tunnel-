@@ -5,7 +5,9 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.Manifest
 import android.net.VpnService
+import android.os.Build
 import android.os.Bundle
 import android.text.format.DateUtils
 import android.view.View
@@ -60,6 +62,12 @@ class MainActivity : AppCompatActivity() {
     private var userWantsConnection = false
     private var lastState = TunnelState.State()
     private var logVisible = false
+    private var notifAskedThisSession = false
+
+    /** Android 13+ hides foreground-service notifications until the user allows them. Ask once; VPN works either way. */
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        connect()
+    }
 
     private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val server = pendingServer
@@ -266,6 +274,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun connect() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && !notifAskedThisSession &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notifAskedThisSession = true
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
         if (servers.isEmpty()) {
             toast("No servers yet. Updating the list…")
             refreshAndTest(manual = false)

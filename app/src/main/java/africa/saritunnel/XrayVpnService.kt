@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.net.Uri
+import android.net.TrafficStats
 import android.net.VpnService
 import android.os.Build
 import android.os.IBinder
@@ -14,7 +15,10 @@ import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -22,6 +26,7 @@ import java.net.HttpURLConnection
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.URL
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
@@ -52,6 +57,68 @@ class XrayVpnService : VpnService() {
     private val generation = AtomicInteger(0)
     private var tun: ParcelFileDescriptor? = null
     @Volatile private var coreStarted = false
+    private var statsJob: Job? = null
+    private var sessionName: String = ""
+    private var sessionStartMs: Long = 0L
+
+    /** Starts the periodic notification refresh with traffic totals and rates. */
+    private fun startStatsLoop(name: String, startedAt: Long) {
+        sessionName = name
+        sessionStartMs = startedAt
+        statsJob?.cancel()
+        statsJob = scope.launch {
+            val uid = applicationInfo.uid
+            var lastRx = TrafficStats.getUidRxBytes(uid)
+            var lastTx = TrafficStats.getUidTxBytes(uid)
+            var lastTime = System.currentTimeMillis()
+            while (isActive) {
+                delay(3_000)
+                val rx = TrafficStats.getUidRxBytes(uid)
+                val tx = TrafficStats.getUidTxBytes(uid)
+                val now = System.currentTimeMillis()
+                val seconds = ((now - lastTime) / 1000.0).coerceAtLeast(0.001)
+                val rxRate = if (rx >= 0 && lastRx >= 0) (rx - lastRx) / seconds else -1.0
+                val txRate = if (tx >= 0 && lastTx >= 0) (tx - lastTx) / seconds else -1.0
+                lastRx = rx; lastTx = tx; lastTime = now
+                val elapsed = (now - sessionStartMs) / 1000
+                val phaseText = if (TunnelState.state.value.phase == TunnelState.Phase.CONNECTED) "Connected" else "Internet not verified"
+                val lines = listOf(
+                    "$phaseText · ${formatDuration(elapsed)}",
+                    "Download ${formatBytes(rx)} (${formatRate(rxRate)})",
+                    "Upload ${formatBytes(tx)} (${formatRate(txRate)})",
+                    "Traffic counted for Sari VPN's tunnel (encrypted), approximate."
+                )
+                getSystemService(NotificationManager::class.java).notify(
+                    NOTIFICATION_ID, notification(lines.first(), lines.joinToString("\n"), "Sari VPN · $name")
+                )
+            }
+        }
+    }
+
+    private fun stopStatsLoop() {
+        statsJob?.cancel()
+        statsJob = null
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 0 -> "—"
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024L * 1024 -> String.format(Locale.US, "%.1f KB", bytes / 1024.0)
+        bytes < 1024L * 1024 * 1024 -> String.format(Locale.US, "%.1f MB", bytes / 1048576.0)
+        else -> String.format(Locale.US, "%.2f GB", bytes / 1073741824.0)
+    }
+
+    private fun formatRate(bytesPerSecond: Double): String = when {
+        bytesPerSecond < 0 -> "—"
+        bytesPerSecond < 1024 -> String.format(Locale.US, "%.0f B/s", bytesPerSecond)
+        bytesPerSecond < 1024 * 1024 -> String.format(Locale.US, "%.1f KB/s", bytesPerSecond / 1024)
+        else -> String.format(Locale.US, "%.2f MB/s", bytesPerSecond / 1048576)
+    }
+
+    private fun formatDuration(totalSeconds: Long): String {
+        val s = totalSeconds.coerceAtLeast(0)
+        return String.format(Locale.US, "%02d:%02d:%02d", s / 3600, (s / 60) % 60, s % 60)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -100,7 +167,7 @@ class XrayVpnService : VpnService() {
                     if (myGeneration != generation.get()) return@withLock
 
                     tun = Builder()
-                        .setSession("Sari VPN · VLESS")
+                        .setSession("Sari VPN")
                         .setMtu(1280)
                         .addAddress("10.111.0.1", 32)
                         .addRoute("0.0.0.0", 0)
@@ -130,7 +197,7 @@ class XrayVpnService : VpnService() {
                             connectedAtMs = System.currentTimeMillis()
                         )
                         TunnelState.log("Internet verified through $serverName.")
-                        updateNotification("Connected to $serverName")
+                        startStatsLoop(serverName, System.currentTimeMillis())
                     } else {
                         // The core is running. A failed probe may be a probe-URL or DNS issue, so keep the tunnel
                         // up and say so instead of reporting a fake "connected" or silently dropping it.
@@ -141,7 +208,7 @@ class XrayVpnService : VpnService() {
                             connectedAtMs = System.currentTimeMillis()
                         )
                         TunnelState.log("Tunnel started via $serverName, but HTTPS probes failed. The tunnel is still up.")
-                        updateNotification("Tunnel up · internet not verified")
+                        startStatsLoop(serverName, System.currentTimeMillis())
                     }
                 } catch (e: Exception) {
                     if (myGeneration != generation.get()) {
@@ -202,7 +269,7 @@ class XrayVpnService : VpnService() {
         }
     }
 
-    private fun notification(message: String): Notification {
+    private fun notification(message: String, detail: String? = null, title: String = "Sari VPN"): Notification {
         val open = PendingIntent.getActivity(
             this, 0, Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
@@ -213,8 +280,10 @@ class XrayVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL)
             .setSmallIcon(R.drawable.ic_stat_vpn)
-            .setContentTitle("Sari VPN · VLESS")
+            .setContentTitle(title)
             .setContentText(message)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(detail ?: message))
+            .setOnlyAlertOnce(true)
             .setContentIntent(open)
             .setOngoing(true)
             .addAction(0, "Disconnect", stop)
@@ -239,6 +308,7 @@ class XrayVpnService : VpnService() {
     }
 
     private fun shutdownCore(finalStatus: String? = null) {
+        stopStatsLoop()
         runCatching { if (coreStarted) XrayBridge.stop() }
         coreStarted = false
         runCatching { tun?.close() }
@@ -260,6 +330,7 @@ class XrayVpnService : VpnService() {
 
     override fun onDestroy() {
         generation.incrementAndGet()
+        stopStatsLoop()
         // Android can destroy the service independently of the app UI. Finish native cleanup
         // before cancelling the scope so the Go core and the TUN descriptor are not leaked.
         kotlinx.coroutines.runBlocking(Dispatchers.IO) {

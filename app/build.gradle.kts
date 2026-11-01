@@ -11,8 +11,8 @@ android {
         applicationId = "africa.saritunnel"
         minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "2.2.0"
+        versionCode = 6
+        versionName = "2.2.3"
     }
 
     buildTypes {
@@ -39,7 +39,8 @@ android {
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
     // Built by scripts/build-xray-aar.sh from xray-go during preBuild / GitHub Actions.
-    implementation(files("libs/xray.aar"))
+    // AAR must be resolved as an Android library (flatDir repo in settings.gradle.kts).
+    implementation(name = "xray", ext = "aar")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")

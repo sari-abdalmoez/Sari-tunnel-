@@ -104,10 +104,23 @@ object XrayConfigBuilder {
             .put("tag", "sari-tun")
             .put("protocol", "tun")
             .put("settings", JSONObject().put("name", "saritun").put("mtu", 1280)))
+        // Direct outbound for local networks; "freedom" dials through the protected sockets.
+        val direct = JSONObject().put("tag", "direct").put("protocol", "freedom")
+        val privateRanges = JSONArray()
+            .put("10.0.0.0/8").put("172.16.0.0/12").put("192.168.0.0/16")
+            .put("127.0.0.0/8").put("169.254.0.0/16").put("fc00::/7").put("fe80::/10")
+        val routing = JSONObject()
+            .put("domainStrategy", "IPIfNonMatch")
+            .put("rules", JSONArray().put(JSONObject()
+                .put("type", "field").put("ip", privateRanges).put("outboundTag", "direct")))
+        // DNS queries go to public resolvers through the tunnel; the phone's resolver is not used.
+        val dns = JSONObject().put("servers", JSONArray().put("1.1.1.1").put("8.8.8.8"))
         val root = JSONObject()
             .put("log", JSONObject().put("loglevel", "warning"))
+            .put("dns", dns)
             .put("inbounds", inbounds)
-            .put("outbounds", JSONArray().put(outbound))
+            .put("outbounds", JSONArray().put(outbound).put(direct))
+            .put("routing", routing)
         return root.toString()
     }
 }
